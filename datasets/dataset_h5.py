@@ -7,6 +7,12 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset
 
+try:
+    from openslide.lowlevel import OpenSlideError
+except Exception:
+    class OpenSlideError(Exception):
+        pass
+
 
 class Whole_Slide_Bag(Dataset):
     def __init__(self,
@@ -93,115 +99,117 @@ class Whole_Slide_Bag_FP(Dataset):
         print('transformations: ', self.roi_transforms)
 
     def __getitem__(self, idx):
+        try:
+            with h5py.File(self.file_path, 'r') as hdf5_file:
+                coord = hdf5_file['coords'][idx]
 
-        with h5py.File(self.file_path, 'r') as hdf5_file:
-            coord = hdf5_file['coords'][idx]
+            if self.extract_high_res_features:
 
-        if self.extract_high_res_features:
+                if self.dataset_name == 'camelyon16':
+                    high_resolution_imgs = []
+                    high_resolution_coords = []
 
-            if self.dataset_name == 'camelyon16':
+                    x_start = coord[0]
+                    y_start = coord[1]
 
-                high_resolution_imgs = []
-                high_resolution_coords = []
+                    scale_factor = 2 ** (self.patch_level_low_res - self.patch_level_high_res)
+                    step_size = 256
 
-                x_start = coord[0]
-                y_start = coord[1]
+                    start_time_hr = time.time()
 
-                scale_factor = 2 ** (self.patch_level_low_res - self.patch_level_high_res)
-                step_size = 256
-                cnt = 0
+                    # Step 1 - At High Resolution
+                    for x_step_idx in range(scale_factor):
+                        for y_step_idx in range(scale_factor):
+                            x_curr = x_start + x_step_idx * 2 * step_size
+                            y_curr = y_start + y_step_idx * 2 * step_size
+                            patch = self.wsi.read_region((x_curr, y_curr), self.patch_level_high_res,
+                                                         (self.patch_size, self.patch_size)).convert("RGB")
+                            patch = self.roi_transforms(patch)
+                            high_resolution_imgs.append(patch)
+                            high_resolution_coords.append(np.array([x_curr, y_curr]))
 
-                start_time_hr = time.time()
+                    # Combining all logic to get the output
+                    high_resolution_imgs = torch.stack(high_resolution_imgs)
+                    high_resolution_coords = np.stack(high_resolution_coords)
+                    end_time_hr = time.time()
 
-                # Step 1 - At High Resolution
-                for x_step_idx in range(scale_factor):
-                    for y_step_idx in range(scale_factor):
-                        x_curr = x_start + x_step_idx  * 2  *  step_size
-                        y_curr = y_start + y_step_idx  * 2  *  step_size
-                        patch = self.wsi.read_region((x_curr, y_curr), self.patch_level_high_res,
-                                                     (self.patch_size, self.patch_size)).convert("RGB")
-                        cnt += 1
-                        patch = self.roi_transforms(patch)
-                        high_resolution_imgs.append(patch)
-                        high_resolution_coords.append(np.array([x_curr, y_curr]))
+                    # Step 2 - At Low Resolution
+                    start_time_lr = time.time()
+                    patch = self.wsi.read_region((x_start, y_start), self.patch_level_low_res,
+                                                 (self.patch_size, self.patch_size)).convert("RGB")
+                    low_resolution_imgs = self.roi_transforms(patch)
+                    low_resolution_coords = coord
+                    end_time_lr = time.time()
 
-                # Combining all logic to get the output
-                high_resolution_imgs = torch.stack(high_resolution_imgs)
-                high_resolution_coords = np.stack(high_resolution_coords)
-                end_time_hr = time.time()
+                    return {
+                        'hr_img': high_resolution_imgs,  # Op : K, 3, 224, 224
+                        'hr_coords': high_resolution_coords,  # Op : K, 2
+                        'hr_time': end_time_hr - start_time_hr,  # Op : 1
+                        'lr_img': low_resolution_imgs,  # Op : 3, 224, 224
+                        'lr_coords': low_resolution_coords,  # Op : 2
+                        'lr_time': end_time_lr - start_time_lr  # Op : 1
+                    }
 
-                # Step 2 - At Low Resolution
-                start_time_lr = time.time()
-                patch = self.wsi.read_region((x_start, y_start), self.patch_level_low_res,
-                                             (self.patch_size, self.patch_size)).convert("RGB")
-                low_resolution_imgs = self.roi_transforms(patch)
-                low_resolution_coords = coord
-                end_time_lr = time.time()
+                elif self.dataset_name == 'tcga':
+                    high_resolution_imgs = []
+                    high_resolution_coords = []
 
-                return {
-                    'hr_img': high_resolution_imgs,  # Op : K, 3, 224, 224
-                    'hr_coords': high_resolution_coords,  # Op : K, 2
-                    'hr_time': end_time_hr - start_time_hr,  # Op : 1
-                    'lr_img': low_resolution_imgs,  # Op : 3, 224, 224
-                    'lr_coords': low_resolution_coords,  # Op : 2
-                    'lr_time': end_time_lr - start_time_lr  # Op : 1
-                }
+                    x_start = coord[0]
+                    y_start = coord[1]
 
-            elif self.dataset_name == 'tcga':
+                    scale_factor = 4 ** (self.patch_level_low_res - self.patch_level_high_res)
+                    step_size = 256
 
-                high_resolution_imgs = []
-                high_resolution_coords = []
+                    start_time_hr = time.time()
 
-                x_start = coord[0]
-                y_start = coord[1]
+                    # Step 1 - At High Resolution
+                    for x_step_idx in range(scale_factor):
+                        for y_step_idx in range(scale_factor):
+                            x_curr = x_start + x_step_idx * 4 * step_size
+                            y_curr = y_start + y_step_idx * 4 * step_size
+                            patch = self.wsi.read_region((x_curr, y_curr), self.patch_level_high_res,
+                                                         (self.patch_size, self.patch_size)).convert("RGB")
+                            patch = self.roi_transforms(patch)
+                            high_resolution_imgs.append(patch)
+                            high_resolution_coords.append(np.array([x_curr, y_curr]))
 
-                scale_factor = 4 ** (self.patch_level_low_res - self.patch_level_high_res)
-                step_size = 256
-                cnt = 0
+                    # Combining all logic to get the output
+                    high_resolution_imgs = torch.stack(high_resolution_imgs)
+                    high_resolution_coords = np.stack(high_resolution_coords)
+                    end_time_hr = time.time()
 
-                start_time_hr = time.time()
+                    # Step 2 - At Low Resolution
+                    start_time_lr = time.time()
+                    patch = self.wsi.read_region((x_start, y_start), self.patch_level_low_res,
+                                                 (self.patch_size, self.patch_size)).convert("RGB")
+                    low_resolution_imgs = self.roi_transforms(patch)
+                    low_resolution_coords = coord
+                    end_time_lr = time.time()
 
-                # Step 1 - At High Resolution
-                for x_step_idx in range(scale_factor):
-                    for y_step_idx in range(scale_factor):
-                        x_curr = x_start + x_step_idx * 4 * step_size
-                        y_curr = y_start + y_step_idx * 4 * step_size
-                        patch = self.wsi.read_region((x_curr, y_curr), self.patch_level_high_res,
-                                                     (self.patch_size, self.patch_size)).convert("RGB")
-                        cnt += 1
-                        patch = self.roi_transforms(patch)
-                        high_resolution_imgs.append(patch)
-                        high_resolution_coords.append(np.array([x_curr, y_curr]))
+                    return {
+                        'hr_img': high_resolution_imgs,  # Op : K, 3, 224, 224
+                        'hr_coords': high_resolution_coords,  # Op : K, 2
+                        'hr_time': end_time_hr - start_time_hr,  # Op : 1
+                        'lr_img': low_resolution_imgs,  # Op : 3, 224, 224
+                        'lr_coords': low_resolution_coords,  # Op : 2
+                        'lr_time': end_time_lr - start_time_lr  # Op : 1
+                    }
 
-                # Combining all logic to get the output
-                high_resolution_imgs = torch.stack(high_resolution_imgs)
-                high_resolution_coords = np.stack(high_resolution_coords)
-                end_time_hr = time.time()
+            else:
 
-                # Step 2 - At Low Resolution
-                start_time_lr = time.time()
-                patch = self.wsi.read_region((x_start, y_start), self.patch_level_low_res,
-                                             (self.patch_size, self.patch_size)).convert("RGB")
-                low_resolution_imgs = self.roi_transforms(patch)
-                low_resolution_coords = coord
-                end_time_lr = time.time()
+                start_time = time.time()
+                img = self.wsi.read_region(coord, self.patch_level_low_res, (self.patch_size, self.patch_size)).convert('RGB')
+                img = self.roi_transforms(img)
+                end_time = time.time()
+                return {'img': img, 'coord': coord, 'time': end_time - start_time}
 
-                return {
-                    'hr_img': high_resolution_imgs,  # Op : K, 3, 224, 224
-                    'hr_coords': high_resolution_coords,  # Op : K, 2
-                    'hr_time': end_time_hr - start_time_hr,  # Op : 1
-                    'lr_img': low_resolution_imgs,  # Op : 3, 224, 224
-                    'lr_coords': low_resolution_coords,  # Op : 2
-                    'lr_time': end_time_lr - start_time_lr  # Op : 1
-                }
-
-        else:
-
-            start_time = time.time()
-            img = self.wsi.read_region(coord, self.patch_level_low_res, (self.patch_size, self.patch_size)).convert('RGB')
-            img = self.roi_transforms(img)
-            end_time = time.time()
-            return {'img': img, 'coord': coord, 'time': end_time - start_time}
+        except OpenSlideError as err:
+            # Corrupt tiles are expected occasionally on large WSI collections over NAS.
+            print(f"[WARN] Skipping corrupt tile at idx={idx} in {self.file_path}: {err}")
+            return None
+        except Exception as err:
+            print(f"[WARN] Skipping unreadable tile at idx={idx} in {self.file_path}: {err}")
+            return None
 
     def get_high_res_img(self, coord):
 

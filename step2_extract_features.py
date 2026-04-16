@@ -37,12 +37,20 @@ import openslide
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader
+from torch.utils.data._utils.collate import default_collate
 from tqdm import tqdm
 
 from datasets.dataset_h5 import Dataset_All_Bags, Whole_Slide_Bag_FP
 from models_features_extraction import get_encoder
 from step1_create_patches import create_time_df
 from utils.path_utils import ensure_path_exists, load_env_file, resolve_path
+
+
+def collate_skip_none(batch):
+    filtered_batch = [item for item in batch if item is not None]
+    if not filtered_batch:
+        return None
+    return default_collate(filtered_batch)
 
 
 def plot_tensor_images(images, num_rows=1, num_cols=1, file_name=None, figsize=(10, 10)):
@@ -124,6 +132,9 @@ def compute_w_loader(loader, model, verbose=0, extract_high_res_features = True,
     total_time_list = []
 
     for count, data in enumerate(tqdm(loader)):
+        if data is None:
+            continue
+
         with torch.inference_mode():
 
             if extract_high_res_features:
@@ -192,6 +203,9 @@ def compute_w_loader(loader, model, verbose=0, extract_high_res_features = True,
                 total_time_list.append(total_time_feat)
 
     if extract_high_res_features:
+        if len(hr_features_list) == 0 or len(lr_features_list) == 0:
+            return None, None, 0.0, None, None, 0.0
+
         hr_features = torch.cat(hr_features_list, dim=0).numpy()
         lr_features = torch.cat(lr_features_list, dim=0).numpy()
         hr_coords = np.concatenate(hr_coords_list, axis=0)
@@ -202,6 +216,8 @@ def compute_w_loader(loader, model, verbose=0, extract_high_res_features = True,
         return hr_features, hr_coords, hr_total_time, lr_features, lr_coords, lr_total_time
 
     else :
+        if len(features_list) == 0:
+            return None, None, 0.0
 
         features = torch.cat(features_list, dim=0).numpy()
         coords = np.concatenate(coords_list, axis=0)
@@ -240,6 +256,7 @@ def get_arguments() :
     parser.add_argument('--time_csv', type=str, default=None, help='store the features time per slide')
     parser.add_argument('--lr_time_col_name', type=str, default=None, help='column name for time_csv_col_name')
     parser.add_argument('--hr_time_col_name', type=str, default=None, help='column name for time_csv_col_name')
+    parser.add_argument('--resume', action='store_true', help='resume feature extraction by appending to existing output files and skipping completed slides')
 
 
     # Secondary Arguments ---> These arguments are default used for feature extraction 
@@ -300,13 +317,16 @@ if __name__ == '__main__':
     os.makedirs(os.path.join(args.feat_dir, 'lr', 'pt_files'), exist_ok=True)
     os.makedirs(os.path.join(args.feat_dir, 'lr', 'h5_files'), exist_ok=True)
     h5_path_lr = os.path.join(args.feat_dir, 'lr', 'h5_files', 'patch_feats_pretrain_%s.h5' % args.pretrain)
-    h5file_lr = h5py.File(h5_path_lr, "w")
+    h5_file_mode = "a" if args.resume else "w"
+    h5file_lr = h5py.File(h5_path_lr, h5_file_mode)
     
     os.makedirs(os.path.join(args.feat_dir, 'hr', 'pt_files'), exist_ok=True)
     os.makedirs(os.path.join(args.feat_dir, 'hr', 'h5_files'), exist_ok=True)
     h5_path_hr = os.path.join(args.feat_dir, 'hr', 'h5_files', 'patch_feats_pretrain_%s.h5' % args.pretrain)
-    h5file_hr = h5py.File(h5_path_hr, "w")
+    h5file_hr = h5py.File(h5_path_hr, h5_file_mode)
     
+    completed_lr = set(h5file_lr.keys()) if args.resume else set()
+    completed_hr = set(h5file_hr.keys()) if args.resume and args.extract_high_res_features else set()
     # Loading the pretrained encoder ----> For now we are working with resnet-50 architecture
     model, img_transforms = get_encoder(args.model_name, pretrain= args.pretrain)
     model.eval()
@@ -337,6 +357,15 @@ if __name__ == '__main__':
         print('\nprogress: {}/{}'.format(bag_candidate_idx, len(bags_dataset)))
         print(f"Slide name : {slide_id}")
 
+        if args.resume:
+            if args.extract_high_res_features:
+                if slide_id in completed_lr and slide_id in completed_hr:
+                    print(f"resume skip {slide_id}: already present in lr/hr h5 outputs")
+                    continue
+            else:
+                if slide_id in completed_lr:
+                    print(f"resume skip {slide_id}: already present in lr h5 output")
+                    continue
         if not args.no_auto_skip:
             print('skipped {}'.format(slide_id))
             continue
@@ -355,13 +384,16 @@ if __name__ == '__main__':
                                      patch_level_high_res=args.patch_level_high_res,
                                      dataset_name=args.dataset_name)
 
-        loader = DataLoader(dataset=dataset, batch_size=args.batch_size, **loader_kwargs)
+        loader = DataLoader(dataset=dataset, batch_size=args.batch_size, collate_fn=collate_skip_none, **loader_kwargs)
 
         if args.extract_high_res_features:
 
             hr_features, hr_coords, hr_total_time, lr_features, lr_coords, lr_total_time = compute_w_loader(
                 loader=loader, model=model, verbose=1, device = device)
 
+            if hr_features is None or lr_features is None:
+                print(f"[WARN] No valid tiles produced for slide {slide_id}; skipping feature write")
+                continue
             time_elapsed = time.time() - time_start
             print('\ncomputing features for {} took {} s'.format(slide_id, time_elapsed))
 
@@ -382,6 +414,9 @@ if __name__ == '__main__':
 
             features, coords, total_time = compute_w_loader(loader=loader, model=model, verbose=1, device = device, extract_high_res_features = args.extract_high_res_features )
 
+            if features is None:
+                print(f"[WARN] No valid tiles produced for slide {slide_id}; skipping feature write")
+                continue
             # Storing time details -->
             # Check if slide_id exists
             if slide_id in time_df['slide_name'].values:
@@ -400,11 +435,15 @@ if __name__ == '__main__':
         if args.extract_high_res_features :
 
             # Storing features
+            if slide_id in h5file_hr:
+                del h5file_hr[slide_id]
             slide_grp_hr = h5file_hr.create_group(slide_id)
             slide_grp_hr.create_dataset('feat', data=hr_features.astype(np.float16))
             slide_grp_hr.create_dataset('coords', data=hr_coords)
             slide_grp_hr.attrs['label'] = df.loc[slide_id_with_ext]['label']
 
+            if slide_id in h5file_lr:
+                del h5file_lr[slide_id]
             slide_grp_lr = h5file_lr.create_group(slide_id)
             slide_grp_lr.create_dataset('feat', data=lr_features.astype(np.float16))
             slide_grp_lr.create_dataset('coords', data=lr_coords)
@@ -416,9 +455,14 @@ if __name__ == '__main__':
         else :
 
             # Storing features
+            if slide_id in h5file_lr:
+                del h5file_lr[slide_id]
             slide_grp = h5file_lr.create_group(slide_id)
             slide_grp.create_dataset('feat', data=features.astype(np.float16))
             slide_grp.create_dataset('coords', data=coords)
             slide_grp.attrs['label'] = df.loc[slide_id_with_ext]['label']
 
             torch.save(torch.from_numpy(features), os.path.join(args.feat_dir, 'lr', 'pt_files', slide_id + '.pt'))
+
+    h5file_lr.close()
+    h5file_hr.close()
