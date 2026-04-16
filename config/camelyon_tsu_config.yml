@@ -9,6 +9,7 @@ min_lr: 0
 frac: 0.2
 cosine_threshold: 0.95
 dataset: camelyon16
+nas_root:                        # optional NAS root, e.g. \\172.16.202.70\my_share
 n_class: 2
 
 

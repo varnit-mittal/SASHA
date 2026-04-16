@@ -17,6 +17,146 @@ To install requirements:
 conda create --name <env> --file conda-packages.txt
 ```
 
+## Train Directly From NAS (Streaming)
+
+You can train without copying data locally by pointing config paths to your NAS share.
+On Windows, use UNC paths like `\\172.16.202.70\YOUR_SHARE\...`.
+
+1. Set an optional NAS root once:
+
+```powershell
+$env:SASHA_NAS_ROOT="\\172.16.202.70\YOUR_SHARE"
+```
+
+2. In config files (for example `config/camelyon_config.yml`), set:
+
+```yaml
+nas_root: \\172.16.202.70\YOUR_SHARE
+data_dir: features/lr/h5_files
+```
+
+If `nas_root` is set, relative paths like `features/lr/h5_files` are resolved under that NAS root.
+Absolute paths still work as-is.
+
+3. Run training normally:
+
+```powershell
+python step3_WSI_classification_HAFED.py --config config/camelyon_config.yml --seed 4 --arch hafed --exp_name DEBUG --log_dir outputs/camelyon_hafed
+python step4_extract_intermediate_features.py --config config/camelyon_config.yml --seed 4 --arch hafed --ckpt_path outputs/camelyon_hafed/models/DEBUG/checkpoint-best.pt --output_path features/hr_intermediate
+python step5_tsu_training.py --config config/camelyon_tsu_config.yml --seed 4 --arch hafed --log_dir outputs/camelyon_tsu
+python step6_rl_training.py --config config/camelyon_rl_config.yml --seed 4 --log_dir outputs/camelyon_rl
+```
+
+4. Optional mapped-drive setup (if preferred):
+
+```powershell
+net use Z: \\172.16.202.70\YOUR_SHARE /persistent:yes
+```
+
+Then use paths like `Z:\features\lr\h5_files` in configs.
+
+### Ubuntu Setup
+
+If you run on Ubuntu and your SMB share name is `home` with dataset directory `/mnt/nas/Dataset`, use the exact commands below.
+
+1. Create NAS credentials file (outside repo):
+
+```bash
+mkdir -p ~/.smb
+cat > ~/.smb/nas-172.16.202.70.cred << 'EOF'
+username=varnitm
+password=YOUR_NAS_PASSWORD
+domain=WORKGROUP
+EOF
+chmod 600 ~/.smb/nas-172.16.202.70.cred
+```
+
+2. Mount NAS share `home` and verify `Dataset`:
+
+```bash
+sudo mkdir -p /mnt/nas
+sudo mount -t cifs //172.16.202.70/home /mnt/nas -o credentials=$HOME/.smb/nas-172.16.202.70.cred,uid=$(id -u),gid=$(id -g),file_mode=0644,dir_mode=0755,iocharset=utf8,vers=3.0,sec=ntlmssp
+ls -la /mnt/nas/Dataset
+```
+
+3. Create project `.env`:
+
+```bash
+cat > .env << 'EOF'
+SASHA_NAS_ROOT=/mnt/nas/Dataset
+SASHA_SOURCE_DIR=/mnt/nas/Dataset/raw_wsi
+SASHA_SAVE_DIR=/mnt/nas/Dataset/sasha_outputs/step1
+SASHA_FEAT_DIR=/mnt/nas/Dataset/sasha_outputs/features
+SASHA_LOG_DIR=/mnt/nas/Dataset/sasha_outputs/logs
+EOF
+```
+
+4. Load `.env` in current shell:
+
+```bash
+set -a
+source .env
+set +a
+```
+
+5. Generate NAS-specific config files:
+
+```bash
+python - << 'PY'
+import os
+import yaml
+
+def load_yaml(path):
+	with open(path, 'r', encoding='utf-8') as f:
+		return yaml.safe_load(f)
+
+def dump_yaml(path, data):
+	with open(path, 'w', encoding='utf-8') as f:
+		yaml.safe_dump(data, f, sort_keys=False)
+
+nas_root = os.environ['SASHA_NAS_ROOT']
+feat_dir = os.environ['SASHA_FEAT_DIR']
+log_dir = os.environ['SASHA_LOG_DIR']
+
+c3 = load_yaml('config/camelyon_config.yml')
+c3['nas_root'] = nas_root
+c3['data_dir'] = 'sasha_outputs/features/hr/h5_files'
+dump_yaml('config/camelyon_config_nas.yml', c3)
+
+c5 = load_yaml('config/camelyon_tsu_config.yml')
+c5['nas_root'] = nas_root
+c5['level1_path'] = 'sasha_outputs/features/intermediate_hafed'
+c5['level3_path'] = 'sasha_outputs/features/lr/h5_files'
+dump_yaml('config/camelyon_tsu_config_nas.yml', c5)
+
+c6 = load_yaml('config/camelyon_rl_config.yml')
+c6['nas_root'] = nas_root
+c6['classifier_ckpt_path'] = f"{log_dir}/camelyon_hafed/models/DEBUG/checkpoint-best.pt"
+c6['mlp_fglobal_ckpt'] = f"{log_dir}/camelyon_tsu/models/DEBUG/checkpoint-best.pt"
+c6['level1_path'] = 'sasha_outputs/features/intermediate_hafed'
+c6['level3_path'] = 'sasha_outputs/features/lr/h5_files'
+dump_yaml('config/camelyon_rl_config_nas.yml', c6)
+PY
+```
+
+6. Train full CAMELYON pipeline on NAS paths:
+
+```bash
+python step1_create_patches.py --source "$SASHA_SOURCE_DIR" --save_dir "$SASHA_SAVE_DIR" --extension tif --patch_level 3
+
+python step2_extract_features.py --dataset_name camelyon16 --data_h5_dir "$SASHA_SAVE_DIR" --data_slide_dir "$SASHA_SOURCE_DIR" --slide_ext .tif --csv_path dataset_csv/camelyon16/camelyon16.csv --feat_dir "$SASHA_FEAT_DIR" --batch_size 32 --extract_high_res_features True --patch_level_low_res 3 --patch_level_high_res 1
+
+python step3_WSI_classification_HAFED.py --config config/camelyon_config_nas.yml --seed 4 --arch hafed --exp_name DEBUG --log_dir "$SASHA_LOG_DIR/camelyon_hafed"
+
+python step4_extract_intermediate_features.py --config config/camelyon_config_nas.yml --seed 4 --arch hafed --ckpt_path "$SASHA_LOG_DIR/camelyon_hafed/models/DEBUG/checkpoint-best.pt" --output_path "$SASHA_FEAT_DIR/intermediate_hafed"
+
+python step5_tsu_training.py --config config/camelyon_tsu_config_nas.yml --seed 4 --arch hafed --log_dir "$SASHA_LOG_DIR/camelyon_tsu"
+
+python step6_rl_training.py --config config/camelyon_rl_config_nas.yml --seed 4 --log_dir "$SASHA_LOG_DIR/camelyon_rl"
+```
+
+Note: this assumes your raw slides are under `/mnt/nas/Dataset/raw_wsi`.
+
 ## Training
 
 To train the model(s) in the paper, run this command:

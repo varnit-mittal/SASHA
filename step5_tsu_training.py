@@ -39,6 +39,7 @@ from torch.utils.tensorboard import SummaryWriter
 from datasets.datasets import build_HDF5_feat_dataset_2
 from modules.fglobal_mlp import FGlobal
 from utils.gpu_utils import check_gpu_availability
+from utils.path_utils import ensure_path_exists, resolve_conf_paths
 from utils.utils import MetricLogger, SmoothedValue, adjust_learning_rate
 from utils.utils import save_model, Struct, set_seed
 
@@ -78,6 +79,10 @@ def main():
         c = yaml.load(ymlfile, Loader=yaml.FullLoader)
         c.update(vars(args))
         conf = Struct(**c)
+
+    resolve_conf_paths(conf, ['level1_path', 'level3_path', 'log_dir'], base_dir=os.getcwd())
+    ensure_path_exists(conf.level1_path, 'level1_path', expect_dir=True)
+    ensure_path_exists(conf.level3_path, 'level3_path', expect_dir=True)
 
     conf.in_features = 384
     ff_dim = 512

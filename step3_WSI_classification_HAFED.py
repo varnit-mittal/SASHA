@@ -43,6 +43,7 @@ from architecture.transformer import ACMIL_GA
 from architecture.transformer import HAFED
 from datasets.datasets import build_HDF5_feat_dataset
 from utils.gpu_utils import check_gpu_availability
+from utils.path_utils import ensure_path_exists, resolve_conf_paths
 from utils.utils import MetricLogger, SmoothedValue, adjust_learning_rate
 from utils.utils import save_model, Struct, set_seed
 
@@ -81,6 +82,11 @@ def main():
         c = yaml.load(ymlfile, Loader=yaml.FullLoader)
         c.update(vars(args))
         conf = Struct(**c)
+
+    resolve_conf_paths(conf, ['data_dir', 'data_csv', 'log_dir'], base_dir=os.getcwd())
+    ensure_path_exists(conf.data_dir, 'data_dir', expect_dir=True)
+    if getattr(conf, 'data_csv', None):
+        ensure_path_exists(conf.data_csv, 'data_csv', expect_dir=False)
 
     if args.arch == "hafed" :  # HAFED model is used here
         hyparams = {

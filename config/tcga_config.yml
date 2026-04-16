@@ -20,6 +20,7 @@ mask_drop: 0.4
 
 # Dataset
 dataset: tcga
+nas_root:                            # optional NAS root, e.g. \\172.16.202.70\my_share
 n_class: 2                            # number of classes
 data_dir:                             # directory of dataset
 data_csv:                             # dataset csv file path in dataset_csv/tcga

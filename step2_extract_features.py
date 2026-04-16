@@ -42,6 +42,7 @@ from tqdm import tqdm
 from datasets.dataset_h5 import Dataset_All_Bags, Whole_Slide_Bag_FP
 from models_features_extraction import get_encoder
 from step1_create_patches import create_time_df
+from utils.path_utils import ensure_path_exists, load_env_file, resolve_path
 
 
 def plot_tensor_images(images, num_rows=1, num_cols=1, file_name=None, figsize=(10, 10)):
@@ -260,6 +261,27 @@ if __name__ == '__main__':
     args = get_arguments()
     args.device = device
     args = update_arguments(args= args)
+
+    # Load local .env settings (for example SASHA_NAS_ROOT) when present.
+    load_env_file(os.path.join(os.getcwd(), '.env'))
+
+    # Resolve CLI paths so UNC, smb://, env vars and NAS-rooted relative paths work consistently.
+    nas_root = os.environ.get('SASHA_NAS_ROOT')
+    args.data_h5_dir = resolve_path(args.data_h5_dir, nas_root=nas_root, base_dir=os.getcwd())
+    args.data_slide_dir = resolve_path(args.data_slide_dir, nas_root=nas_root, base_dir=os.getcwd())
+    args.csv_path = resolve_path(args.csv_path, nas_root=nas_root, base_dir=os.getcwd())
+    args.feat_dir = resolve_path(args.feat_dir, nas_root=nas_root, base_dir=os.getcwd())
+    args.time_csv = resolve_path(args.time_csv, nas_root=nas_root, base_dir=os.getcwd())
+
+    ensure_path_exists(args.data_h5_dir, 'data_h5_dir', expect_dir=True)
+    ensure_path_exists(args.data_slide_dir, 'data_slide_dir', expect_dir=True)
+    ensure_path_exists(args.csv_path, 'csv_path', expect_dir=False)
+
+    if args.feat_dir is None:
+        raise ValueError("Expected a valid path for 'feat_dir'.")
+
+    if args.time_csv is not None:
+        os.makedirs(os.path.dirname(args.time_csv), exist_ok=True)
 
     print('Initializing dataset')
 

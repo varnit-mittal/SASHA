@@ -4,3 +4,4 @@ outputs
 *.pyc
 extras
 config_prince
+.env

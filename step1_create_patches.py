@@ -19,6 +19,7 @@ from glob import glob
 import numpy as np
 import pandas as pd
 
+from utils.path_utils import ensure_path_exists, load_env_file, resolve_path
 from wsi_core.WholeSlideImage import WholeSlideImage
 from wsi_core.batch_process_utils import initialize_df
 from wsi_core.wsi_utils import StitchCoords
@@ -160,7 +161,7 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
         slides = [os.path.join(source, f'{slide_name}.tif')]
     else :
         slides = glob(source + f'/*.{args.extension}')
-        slides = [slide for slide in slides if os.path.isfile(os.path.join(source, slide))]
+        slides = [slide for slide in slides if os.path.isfile(slide)]
         print("Slides: ", len(slides))
 
     if process_list is None:
@@ -358,6 +359,22 @@ if __name__ == '__main__':
     parser = get_arguments()
     args = parser.parse_args()
     args = update_arguments(args= args)
+
+    # Load local .env settings (for example SASHA_NAS_ROOT) when present.
+    load_env_file(os.path.join(os.getcwd(), '.env'))
+
+    # Resolve CLI paths so UNC, smb://, env vars and NAS-rooted relative paths work consistently.
+    nas_root = os.environ.get('SASHA_NAS_ROOT')
+    args.source = resolve_path(args.source, nas_root=nas_root, base_dir=os.getcwd())
+    args.save_dir = resolve_path(args.save_dir, nas_root=nas_root, base_dir=os.getcwd())
+    args.time_csv = resolve_path(args.time_csv, nas_root=nas_root, base_dir=os.getcwd())
+
+    ensure_path_exists(args.source, 'source', expect_dir=True)
+    if args.save_dir is None:
+        raise ValueError("Expected a valid path for 'save_dir'.")
+    os.makedirs(args.save_dir, exist_ok=True)
+    if args.time_csv:
+        os.makedirs(os.path.dirname(args.time_csv), exist_ok=True)
 
     # Create the required directories
     patch_save_dir = os.path.join(args.save_dir, 'patches')

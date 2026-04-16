@@ -3,6 +3,7 @@ B: 1
 
 # Dataset details
 dataset: camelyon16
+nas_root:         # optional NAS root, e.g. \\172.16.202.70\my_share
 fglobal: 'mlp'
 
 ## pretrained backbone

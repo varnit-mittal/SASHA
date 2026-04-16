@@ -39,6 +39,7 @@ from modules.fglobal_mlp import FGlobal
 from rl_algorithms.ppo import Agent, Actor, Critic
 from utils.gpu_utils import check_gpu_availability
 from utils.inference_utils import Helper
+from utils.path_utils import ensure_path_exists, resolve_conf_paths
 from utils.utils import Struct
 import torchmetrics
 
@@ -261,5 +262,14 @@ if __name__ == '__main__':
         c = yaml.load(ymlfile, Loader=yaml.FullLoader)
         c.update(vars(args))
         conf = Struct(**c)
+
+    resolve_conf_paths(conf, ['data_h5_dir', 'source', 'csv_path', 'classifier_ckpt_path', 'mlp_fglobal_ckpt', 'rl_ckpt_path', 'save_dir'], base_dir=os.getcwd())
+    ensure_path_exists(conf.data_h5_dir, 'data_h5_dir', expect_dir=True)
+    ensure_path_exists(conf.source, 'source', expect_dir=True)
+    ensure_path_exists(conf.csv_path, 'csv_path', expect_dir=False)
+    ensure_path_exists(conf.classifier_ckpt_path, 'classifier_ckpt_path', expect_dir=False)
+    ensure_path_exists(conf.mlp_fglobal_ckpt, 'mlp_fglobal_ckpt', expect_dir=False)
+    ensure_path_exists(conf.rl_ckpt_path, 'rl_ckpt_path', expect_dir=False)
+    os.makedirs(conf.save_dir, exist_ok=True)
 
     evaluate(conf)

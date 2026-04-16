@@ -23,6 +23,7 @@ python step7_inference.py --config config_prince/tcga_sasha_inference.yml --seed
 """
 
 import argparse
+import os
 from pprint import pprint
 from types import SimpleNamespace
 
@@ -40,6 +41,7 @@ from modules.fglobal_mlp import FGlobal
 from rl_algorithms.ppo import Agent, Actor, Critic
 from step4_extract_intermediate_features import load_model
 from utils.gpu_utils import check_gpu_availability
+from utils.path_utils import ensure_path_exists, resolve_conf_paths
 from utils.utils import MetricLogger
 from utils.utils import Struct, set_seed
 
@@ -88,6 +90,13 @@ def main():
         c = yaml.load(ymlfile, Loader=yaml.FullLoader)
         c.update(vars(args))
         conf = Struct(**c)
+
+    resolve_conf_paths(conf, ['level1_path', 'level3_path', 'classifier_ckpt_path', 'mlp_fglobal_ckpt', 'rl_ckpt_path'], base_dir=os.getcwd())
+    ensure_path_exists(conf.level1_path, 'level1_path', expect_dir=True)
+    ensure_path_exists(conf.level3_path, 'level3_path', expect_dir=True)
+    ensure_path_exists(conf.classifier_ckpt_path, 'classifier_ckpt_path', expect_dir=False)
+    ensure_path_exists(conf.mlp_fglobal_ckpt, 'mlp_fglobal_ckpt', expect_dir=False)
+    ensure_path_exists(conf.rl_ckpt_path, 'rl_ckpt_path', expect_dir=False)
 
     hyparams = {
         'dataset': conf.dataset,

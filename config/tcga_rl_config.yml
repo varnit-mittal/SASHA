@@ -22,6 +22,7 @@ lam: 0.95
 
 # Dataset details
 dataset: tcga
+nas_root:         # optional NAS root, e.g. \\172.16.202.70\my_share
 fglobal: 'mlp'
 
 ## pretrained backbone

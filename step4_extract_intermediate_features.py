@@ -35,6 +35,7 @@ from architecture.transformer import ACMIL_GA
 from architecture.transformer import HAFED
 from datasets.datasets import build_HDF5_feat_dataset
 from utils.gpu_utils import check_gpu_availability
+from utils.path_utils import ensure_path_exists, resolve_conf_paths, resolve_path
 from utils.utils import MetricLogger
 from utils.utils import Struct, set_seed
 
@@ -78,6 +79,17 @@ def main():
         c = yaml.load(ymlfile, Loader=yaml.FullLoader)
         c.update(vars(args))
         conf = Struct(**c)
+
+    resolve_conf_paths(conf, ['data_dir', 'data_csv', 'output_path'], base_dir=os.getcwd())
+    args.ckpt_path = resolve_path(args.ckpt_path, nas_root=getattr(conf, 'nas_root', None), base_dir=os.getcwd())
+    args.output_path = resolve_path(args.output_path, nas_root=getattr(conf, 'nas_root', None), base_dir=os.getcwd())
+    conf.output_path = args.output_path
+
+    ensure_path_exists(conf.data_dir, 'data_dir', expect_dir=True)
+    ensure_path_exists(args.ckpt_path, 'ckpt_path', expect_dir=False)
+    if conf.data_csv:
+        ensure_path_exists(conf.data_csv, 'data_csv', expect_dir=False)
+    os.makedirs(conf.output_path, exist_ok=True)
 
 
     # Set different seed for dataset

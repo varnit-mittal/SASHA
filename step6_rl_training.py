@@ -40,6 +40,7 @@ from modules.fglobal_mlp import FGlobal
 from rl_algorithms.ppo import Agent, Actor, Critic
 from step4_extract_intermediate_features import load_model
 from utils.gpu_utils import check_gpu_availability
+from utils.path_utils import ensure_path_exists, resolve_conf_paths
 from utils.utils import MetricLogger, SmoothedValue, adjust_learning_rate
 from utils.utils import save_policy_model, Struct, set_seed
 
@@ -149,6 +150,13 @@ def main():
         c = yaml.load(ymlfile, Loader=yaml.FullLoader)
         c.update(vars(args))
         conf = Struct(**c)
+        resolve_conf_paths(conf, ['level1_path', 'level3_path', 'classifier_ckpt_path', 'mlp_fglobal_ckpt', 'rl_ckpt_path', 'log_dir'], base_dir=os.getcwd())
+        ensure_path_exists(conf.level1_path, 'level1_path', expect_dir=True)
+        ensure_path_exists(conf.level3_path, 'level3_path', expect_dir=True)
+        ensure_path_exists(conf.classifier_ckpt_path, 'classifier_ckpt_path', expect_dir=False)
+        ensure_path_exists(conf.mlp_fglobal_ckpt, 'mlp_fglobal_ckpt', expect_dir=False)
+        if conf.restart:
+            ensure_path_exists(conf.rl_ckpt_path, 'rl_ckpt_path', expect_dir=False)
         conf.log_dir = os.path.join(conf.log_dir, f"cosine_{conf.cosine_threshold}_frac_{conf.frac_visit}_seed_{conf.seed}")
 
     conf.writer = SummaryWriter(log_dir=os.path.join(conf.log_dir, "logs", conf.exp_name))
