@@ -87,8 +87,9 @@ def main():
 
     ensure_path_exists(conf.data_dir, 'data_dir', expect_dir=True)
     ensure_path_exists(args.ckpt_path, 'ckpt_path', expect_dir=False)
-    if conf.data_csv:
-        ensure_path_exists(conf.data_csv, 'data_csv', expect_dir=False)
+    data_csv_path = getattr(conf, 'data_csv', None)
+    if data_csv_path:
+        ensure_path_exists(data_csv_path, 'data_csv', expect_dir=False)
     os.makedirs(conf.output_path, exist_ok=True)
 
 
