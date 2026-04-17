@@ -1,0 +1,53 @@
+## RL hyper parameters
+train_epoch: 25
+num_envs: 2
+B: 1
+warmup_epoch: 0
+wd: 0.0001
+lr: 0.00001
+min_lr: 0
+
+
+# Other Hyper parameters
+explore_frac: 0.05
+gamma: 1.0
+clip: 0.1
+entropy_coef: 0.001
+use_entropy_loss: True
+max_grad_norm: 0.5
+num_epochs_on_single_roll_out: 4
+only_ce_as_reward: True
+use_gae: True
+lam: 0.95
+
+# Dataset details
+dataset: camelyon16
+nas_root: /mnt/nas/Dataset
+fglobal: 'mlp'
+
+## pretrained backbone
+backbone: 'ViT-S/16'   #'ResNet_50' 'ViT-S/16'
+pretrain: 'medical_ssl' #natural_supervised medical_ssl
+D_feat: 384
+D_inner: 128
+
+
+# Model weights -
+frac_visit: 0.2
+cosine_threshold: 0.95
+classifier_ckpt_path: /mnt/nas/Dataset/sasha_outputs/logs/camelyon_hafed/models/DEBUG/checkpoint-best.pt
+mlp_fglobal_ckpt : /mnt/nas/Dataset/sasha_outputs/logs/camelyon_tsu/models/DEBUG/checkpoint-best.pt
+level1_path: sasha_outputs/features/intermediate_hafed
+level3_path: sasha_outputs/features/lr/h5_files
+
+
+# Restart Training
+restart: False
+# rl_ckpt_path: /mnt/nas/Dataset/sasha_outputs/logs/camelyon_rl/cosine_0.95_frac_0.2_seed_4/models/DEBUG/checkpoint-last.pt
+
+
+# Extra Hyper params
+n_worker: 8
+pin_memory: False
+n_shot: -1
+dim_reduction: False
