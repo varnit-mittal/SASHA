@@ -232,8 +232,20 @@ def main():
     critic_optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, critic.parameters()), lr=0.001, weight_decay=conf.wd)
 
 
-    best_state = {'epoch': -1, 'val_acc': 0, 'val_auc': 0, 'val_f1': 0, 'test_acc': 0, 'test_auc': 0, 'test_f1': 0,
-                  'test_bal_acc': 0, 'test_precision': 0, 'test_recall': 0}
+    best_state = {
+        'epoch': -1,
+        'val_acc': 0,
+        'val_auc': 0,
+        'val_f1': 0,
+        'val_loss': 1e9,
+        'test_acc': 0,
+        'test_auc': 0,
+        'test_f1': 0,
+        'test_loss': 1e9,
+        'test_bal_acc': 0,
+        'test_precision': 0,
+        'test_recall': 0,
+    }
     start_epoch = 0
 
     if conf.restart:
