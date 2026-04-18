@@ -3,7 +3,7 @@ B: 1
 
 # Dataset details
 dataset: tcga
-nas_root:         # optional NAS root, e.g. \\172.16.202.70\my_share
+nas_root: /mnt/nas/Dataset
 fglobal: 'mlp'
 
 ## pretrained backbone
@@ -18,10 +18,11 @@ only_ce_as_reward: True
 frac_visit: 0.2
 cosine_threshold: 0.95
 classifier_ckpt_path:         # HAFED classifier ckpt path
-mlp_fglobal_ckpt :            # TSU model checkpoint path ---> Need to be same, as cosine threshold paramters is mentioned
-level1_path:                  # HAFED intermediate feature representation path from step 4
-level3_path:                  # Low resolution feature path from step 2
-rl_ckpt_path:                 # Load the SASHA-RL Agent checkpoint .pt file
+classifier_ckpt_path: sasha_outputs/logs/tcga_hafed/models/DEBUG/checkpoint-best.pt
+mlp_fglobal_ckpt : sasha_outputs/logs/tcga_tsu/models/DEBUG/checkpoint-best.pt
+level1_path: sasha_outputs/features/tcga_intermediate_hafed
+level3_path: sasha_outputs/features/tcga_lr/h5_files
+rl_ckpt_path: sasha_outputs/logs/tcga_rl/cosine_0.95_frac_0.2_seed_4/models/DEBUG/checkpoint-best.pt
 
 # Extra Hyper params
 n_worker: 8

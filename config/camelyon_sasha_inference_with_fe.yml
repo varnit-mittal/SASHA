@@ -3,7 +3,7 @@ B: 1
 
 # Dataset details
 dataset: camelyon16
-nas_root:         # optional NAS root, e.g. \\172.16.202.70\my_share
+nas_root: /mnt/nas/Dataset
 fglobal: 'mlp'
 
 ## pretrained backbone
@@ -14,17 +14,18 @@ D_inner: 128
 only_ce_as_reward: True
 
 # .tif or .svs raw images folder
-source:                 # Directory path where all the raw images .tif and .svs are stored
-data_h5_dir :           # Directory path generated after step 1 ---> patching
-csv_path :              # Enter csv path from dataset_csv folder
+source: raw_wsi
+data_h5_dir : sasha_outputs/step1
+csv_path : /home/pathousr2/varnit/SASHA/dataset_csv/camelyon16/camelyon16.csv
 
 
 # Model weights -
 frac_visit: 0.2
 cosine_threshold: 0.95
 classifier_ckpt_path:   # HAFED classifier ckpt path
-mlp_fglobal_ckpt :      # TSU path
-rl_ckpt_path:           # RL SASHA ckpt path
+classifier_ckpt_path: sasha_outputs/logs/camelyon_hafed/models/DEBUG/checkpoint-best.pt
+mlp_fglobal_ckpt : sasha_outputs/logs/camelyon_tsu/models/DEBUG/checkpoint-best.pt
+rl_ckpt_path: sasha_outputs/logs/camelyon_rl/cosine_0.95_frac_0.2_seed_4/models/DEBUG/checkpoint-best.pt
 
 # Extra Hyper params
 n_worker: 8
