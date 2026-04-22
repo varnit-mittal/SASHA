@@ -161,7 +161,7 @@ def resolve_wsi_file_path(slide_name, ext, requested_dir=None, nas_root=None):
     )
 
 
-def resolve_feature_dir_with_fallback(configured_dir, role_name, pretrain, nas_root=None):
+def resolve_feature_dir_with_fallback(configured_dir, role_name, pretrain, nas_root=None, additional_roots=None):
     expected_h5 = f'patch_feats_pretrain_{pretrain}.h5'
     role_name = str(role_name)
 
@@ -170,9 +170,25 @@ def resolve_feature_dir_with_fallback(configured_dir, role_name, pretrain, nas_r
 
     configured_dir = resolve_path(configured_dir, nas_root=nas_root, base_dir=os.getcwd())
     if os.path.isdir(configured_dir) and os.path.isfile(os.path.join(configured_dir, expected_h5)):
-        return configured_dir
+        return configured_dir, None
 
     candidates = [configured_dir, os.path.dirname(configured_dir)]
+
+    if additional_roots:
+        for root in additional_roots:
+            if not root:
+                continue
+            candidates.append(root)
+            candidates.append(os.path.dirname(root))
+
+            parent = os.path.dirname(root)
+            grand_parent = os.path.dirname(parent)
+            if parent:
+                candidates.append(os.path.join(parent, 'features'))
+                candidates.append(os.path.join(parent, 'sasha_outputs', 'features'))
+            if grand_parent:
+                candidates.append(os.path.join(grand_parent, 'features'))
+                candidates.append(os.path.join(grand_parent, 'sasha_outputs', 'features'))
 
     if nas_root:
         candidates.extend(
@@ -194,6 +210,9 @@ def resolve_feature_dir_with_fallback(configured_dir, role_name, pretrain, nas_r
     candidates.extend(
         [
             os.path.join(os.getcwd(), 'sasha_outputs', 'features'),
+            os.path.join(os.getcwd(), 'outputs', 'features'),
+            os.path.join(os.getcwd(), 'features'),
+            os.getcwd(),
             '/mnt/nas/Dataset/sasha_outputs/features',
             '/mnt/nas/sasha_outputs/features',
         ]
@@ -203,6 +222,7 @@ def resolve_feature_dir_with_fallback(configured_dir, role_name, pretrain, nas_r
     existing_roots = []
     seen = set()
     found_dirs = []
+    fallback_matches = []
 
     for candidate in candidates:
         if not candidate:
@@ -222,12 +242,26 @@ def resolve_feature_dir_with_fallback(configured_dir, role_name, pretrain, nas_r
         if os.path.isfile(direct_h5):
             found_dirs.append(root)
 
+        for file_name in os.listdir(root):
+            if file_name.startswith('patch_feats_pretrain_') and file_name.endswith('.h5'):
+                fallback_matches.append((root, file_name))
+
         for walk_root, _, files in os.walk(root):
             if expected_h5 in files:
                 found_dirs.append(_norm(walk_root))
+            for file_name in files:
+                if file_name.startswith('patch_feats_pretrain_') and file_name.endswith('.h5'):
+                    fallback_matches.append((_norm(walk_root), file_name))
 
     found_dirs = sorted(set(found_dirs))
-    if not found_dirs:
+    if not found_dirs and not fallback_matches:
+        if len(existing_roots) == 0:
+            raise FileNotFoundError(
+                f"Could not locate '{expected_h5}' for {role_name}. Configured path: {configured_dir}. "
+                f"Checked roots: {checked_roots}. Existing roots: {existing_roots}. "
+                f"No candidate feature directories exist on this machine right now. "
+                f"This usually means the NAS mount is unavailable or mounted at a different path."
+            )
         raise FileNotFoundError(
             f"Could not locate '{expected_h5}' for {role_name}. "
             f"Configured path: {configured_dir}. Checked roots: {checked_roots}. "
@@ -259,10 +293,19 @@ def resolve_feature_dir_with_fallback(configured_dir, role_name, pretrain, nas_r
             score += 1
         return score
 
-    best_dir = max(found_dirs, key=_score_dir)
-    print(f"[WARN] {role_name} not found at configured path: {configured_dir}")
+    if found_dirs:
+        best_dir = max(found_dirs, key=_score_dir)
+        print(f"[WARN] {role_name} not found at configured path: {configured_dir}")
+        print(f"[INFO] Auto-resolved {role_name}: {best_dir}")
+        return best_dir, None
+
+    fallback_matches = sorted(set(fallback_matches))
+    best_dir, best_file = max(fallback_matches, key=lambda item: _score_dir(item[0]))
+    fallback_pretrain = best_file[len('patch_feats_pretrain_'):-len('.h5')]
+    print(f"[WARN] Expected file '{expected_h5}' for {role_name} was not found.")
+    print(f"[WARN] Falling back to '{best_file}' under: {best_dir}")
     print(f"[INFO] Auto-resolved {role_name}: {best_dir}")
-    return best_dir
+    return best_dir, fallback_pretrain
 
 
 def load_pipeline(args):
@@ -277,18 +320,36 @@ def load_pipeline(args):
     conf.mlp_fglobal_ckpt = resolve_checkpoint_with_fallback(conf.mlp_fglobal_ckpt, 'mlp_fglobal_ckpt')
     conf.rl_ckpt_path = resolve_checkpoint_with_fallback(conf.rl_ckpt_path, 'rl_ckpt_path')
 
-    conf.level1_path = resolve_feature_dir_with_fallback(
+    path_hints = [
+        os.path.dirname(conf.classifier_ckpt_path),
+        os.path.dirname(conf.mlp_fglobal_ckpt),
+        os.path.dirname(conf.rl_ckpt_path),
+    ]
+
+    conf.level1_path, level1_pretrain_override = resolve_feature_dir_with_fallback(
         configured_dir=conf.level1_path,
         role_name='level1_path',
         pretrain=conf.pretrain,
-        nas_root=os.environ.get('SASHA_NAS_ROOT'),
+        nas_root=getattr(conf, 'nas_root', None) or os.environ.get('SASHA_NAS_ROOT'),
+        additional_roots=path_hints,
     )
-    conf.level3_path = resolve_feature_dir_with_fallback(
+    conf.level3_path, level3_pretrain_override = resolve_feature_dir_with_fallback(
         configured_dir=conf.level3_path,
         role_name='level3_path',
         pretrain=conf.pretrain,
-        nas_root=os.environ.get('SASHA_NAS_ROOT'),
+        nas_root=getattr(conf, 'nas_root', None) or os.environ.get('SASHA_NAS_ROOT'),
+        additional_roots=path_hints,
     )
+
+    discovered_pretrains = [p for p in [level1_pretrain_override, level3_pretrain_override] if p is not None]
+    if len(discovered_pretrains) == 2 and discovered_pretrains[0] != discovered_pretrains[1]:
+        raise RuntimeError(
+            f"Conflicting pretrain tags discovered for level1/level3 files: {discovered_pretrains}. "
+            f"Please set consistent level1_path and level3_path in config."
+        )
+    if len(discovered_pretrains) > 0 and discovered_pretrains[0] != conf.pretrain:
+        print(f"[WARN] Overriding conf.pretrain from '{conf.pretrain}' to '{discovered_pretrains[0]}' based on discovered feature file.")
+        conf.pretrain = discovered_pretrains[0]
 
     ensure_path_exists(conf.level1_path, 'level1_path', expect_dir=True)
     ensure_path_exists(conf.level3_path, 'level3_path', expect_dir=True)
