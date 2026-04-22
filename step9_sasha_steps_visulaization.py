@@ -40,8 +40,8 @@ def get_arguments() :
     parser.add_argument('--level', type= int, default = 6, help= 'this will determine the downsample factor to save the image')
     parser.add_argument('--seed', type=int, default = 4, help = 'this will help to determine which seed to take for further analysis')
     parser.add_argument('--classifier_arch', default='hafed', choices=['hafed'], help='choice of architecture for HAFED')
-    parser.add_argument('--patch_level_base', default= 2048, help = 'determine the patch size at the highest resolution present in wsi, to downscale properly' )
-    parser.add_argument('--text_font_size', default = 48, help = 'determine the size of the text font in pixels')
+    parser.add_argument('--patch_level_base', type=int, default=2048, help='determine the patch size at the highest resolution present in wsi, to downscale properly')
+    parser.add_argument('--text_font_size', type=int, default=48, help='determine the size of the text font in pixels')
     args = parser.parse_args()
 
     # Load .env (e.g. SASHA_NAS_ROOT) so CLI paths resolve against the NAS root.
@@ -369,10 +369,12 @@ def draw_patches_selected_by_rl_agent(
     is_save=True
 ):
 
+    patch_size_level0 = int(patch_size_level0)
+
     # Overlay RL Agent selected patches (light blue → dark blue)
     if len(coords_patches_selected_by_agent_ls) > 0:
         norm = plt.Normalize(0.0, 0.2)
-        colormap = cm.get_cmap("Blues_r")  # Reverse for dark-to-light blue
+        colormap = plt.get_cmap("Blues_r")  # Reverse for dark-to-light blue
         box_w = int(patch_size_level0 / downscale_factor)
 
         for i, ((x_lvl0, y_lvl0)) in enumerate(coords_patches_selected_by_agent_ls):
@@ -483,10 +485,12 @@ def draw_patches_updated_by_ssu(
     is_save=True
 ):
 
+    patch_size_level0 = int(patch_size_level0)
+
     # Overlay Similar patches (light orange → dark orange)
     if coords_similar_patches_selected_by_agent_ls:
         norm = plt.Normalize(0.0, 0.2)
-        colormap = cm.get_cmap("Oranges_r")
+        colormap = plt.get_cmap("Oranges_r")
         box_w = int(patch_size_level0 / downscale_factor)
 
         for i, (patch_group) in enumerate(coords_similar_patches_selected_by_agent_ls):
