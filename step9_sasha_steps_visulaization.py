@@ -24,6 +24,7 @@ from rl_algorithms.ppo import Agent, Actor, Critic
 from step4_extract_intermediate_features import load_model
 from step7_inference import load_policy_model
 from utils.gpu_utils import check_gpu_availability
+from utils.path_utils import load_env_file, resolve_conf_paths, resolve_path
 from utils.utils import MetricLogger
 from utils.utils import Struct, set_seed
 
@@ -43,6 +44,22 @@ def get_arguments() :
     parser.add_argument('--text_font_size', default = 48, help = 'determine the size of the text font in pixels')
     args = parser.parse_args()
 
+    # Load .env (e.g. SASHA_NAS_ROOT) so CLI paths resolve against the NAS root.
+    load_env_file(os.path.join(os.getcwd(), '.env'))
+    nas_root = os.environ.get('SASHA_NAS_ROOT')
+
+    # Fall back to conventional locations under SASHA_NAS_ROOT when CLI args are omitted.
+    if args.wsi_images_dir_path is None and os.environ.get('SASHA_SOURCE_DIR'):
+        args.wsi_images_dir_path = os.environ['SASHA_SOURCE_DIR']
+    if args.output_dir_path is None and nas_root:
+        args.output_dir_path = os.path.join(nas_root, 'sasha_outputs', 'visualizations', args.slide_name)
+
+    # Resolve every CLI path so relative inputs get prefixed with SASHA_NAS_ROOT.
+    args.wsi_images_dir_path = resolve_path(args.wsi_images_dir_path, nas_root=nas_root, base_dir=os.getcwd())
+    args.annotation_dir_path = resolve_path(args.annotation_dir_path, nas_root=nas_root, base_dir=os.getcwd())
+    args.output_dir_path = resolve_path(args.output_dir_path, nas_root=nas_root, base_dir=os.getcwd())
+    args.config = resolve_path(args.config, nas_root=nas_root, base_dir=os.getcwd())
+
     # Adding Device Details
     gpus = check_gpu_availability(3, 1, [])
     print(f"occupied {gpus}")
@@ -59,6 +76,14 @@ def load_configuration_file():
         c = yaml.load(ymlfile, Loader=yaml.FullLoader)
         c.update(vars(args))
         conf = Struct(**c)
+
+    # Resolve all NAS-backed paths in the config against `nas_root` / SASHA_NAS_ROOT,
+    # mirroring step7_inference.py so relative paths like `sasha_outputs/...` work.
+    resolve_conf_paths(
+        conf,
+        ['level1_path', 'level3_path', 'classifier_ckpt_path', 'mlp_fglobal_ckpt', 'rl_ckpt_path'],
+        base_dir=os.getcwd(),
+    )
 
     # Loading seed
     set_seed(args.seed)
