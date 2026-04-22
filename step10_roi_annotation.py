@@ -255,6 +255,9 @@ def resolve_feature_dir_with_fallback(configured_dir, role_name, pretrain, nas_r
 
     found_dirs = sorted(set(found_dirs))
     if not found_dirs and not fallback_matches:
+        workspace_root = _norm(os.getcwd())
+        non_workspace_existing_roots = [p for p in existing_roots if not _norm(p).startswith(workspace_root)]
+
         if len(existing_roots) == 0:
             raise FileNotFoundError(
                 f"Could not locate '{expected_h5}' for {role_name}. Configured path: {configured_dir}. "
@@ -262,6 +265,15 @@ def resolve_feature_dir_with_fallback(configured_dir, role_name, pretrain, nas_r
                 f"No candidate feature directories exist on this machine right now. "
                 f"This usually means the NAS mount is unavailable or mounted at a different path."
             )
+
+        if len(non_workspace_existing_roots) == 0:
+            raise FileNotFoundError(
+                f"Could not locate '{expected_h5}' for {role_name}. Configured path: {configured_dir}. "
+                f"Checked roots: {checked_roots}. Existing roots: {existing_roots}. "
+                f"Only workspace-local directories are visible; NAS-backed feature roots are not visible. "
+                f"Likely causes: NAS not mounted or mounted at a different path than conf.nas_root."
+            )
+
         raise FileNotFoundError(
             f"Could not locate '{expected_h5}' for {role_name}. "
             f"Configured path: {configured_dir}. Checked roots: {checked_roots}. "
