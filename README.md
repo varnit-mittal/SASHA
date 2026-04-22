@@ -263,16 +263,22 @@ python step7_inference_with_fe.py --config config/camelyon_sasha_inference_with_
 
 ## Step 10 ROI Annotation (Doctor Review)
 
-Step 10 creates a review-friendly ROI overlay directly on the original WSI and exports ROI coordinates.
+Step 10 creates a contour-style ROI overlay directly on the original WSI (instead of rectangular ROI boxes) and exports ROI coordinates.
 
 ```eval
 python step10_roi_annotation.py --config config/camelyon_sasha_inference.yml --slide_name test_068 --ext tif --wsi_images_dir_path "$SASHA_SOURCE_DIR" --output_dir_path /mnt/nas/Dataset/sasha_outputs/roi_annotations/test_068 --seed 1
 ```
 
 Outputs:
-- `<slide_name>_roi_overlay.png` : WSI with ROI rectangles
+- `<slide_name>_roi_overlay.png` : WSI with ROI contour overlays
 - `<slide_name>_roi.csv` : ROI coordinates in level-0 pixels
 - `<slide_name>_roi.json` : ROI metadata
+
+Useful tuning flags:
+- `--roi_percentile 85` : higher value keeps only higher-suspicion regions.
+- `--min_roi_patches 8` : minimum connected patches needed to keep an ROI.
+- `--contour_alpha 0.30` : transparency for filled contour overlay.
+- `--contour_thickness 3` : line thickness for contour boundaries.
 
 Note : For TCGA-NSCL dataset similar config files are present in config/ folder.
 

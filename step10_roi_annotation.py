@@ -6,7 +6,7 @@ suspicion scores, groups high-score patches into connected ROIs, and draws these
 original WSI (.tif/.svs).
 
 Outputs:
-- <slide_name>_roi_overlay.png : WSI with ROI boxes and labels
+- <slide_name>_roi_overlay.png : WSI with ROI contour overlay and labels
 - <slide_name>_roi.csv         : ROI coordinates in level-0 space
 - <slide_name>_roi.json        : ROI metadata
 
@@ -65,6 +65,8 @@ def get_arguments():
     parser.add_argument('--selected_weight', type=float, default=1.0, help='weight for RL-selected patches')
     parser.add_argument('--similar_weight', type=float, default=0.35, help='weight for similarity-updated patches')
     parser.add_argument('--attention_weight', type=float, default=0.65, help='weight for classifier attention scores')
+    parser.add_argument('--contour_alpha', type=float, default=0.30, help='alpha for filled contour overlay [0,1]')
+    parser.add_argument('--contour_thickness', type=int, default=3, help='line thickness for ROI contour boundaries')
 
     args = parser.parse_args()
 
@@ -340,6 +342,7 @@ def generate_connected_rois(coords, scores, patch_size_level0, roi_percentile, m
             'n_patches': int(len(comp_indices)),
             'score_mean': float(scores[comp_indices].mean()),
             'score_max': float(scores[comp_indices].max()),
+            'patch_indices': comp_indices.tolist(),
         }
         rois.append(roi)
 
@@ -358,6 +361,7 @@ def generate_connected_rois(coords, scores, patch_size_level0, roi_percentile, m
                 'n_patches': 1,
                 'score_mean': float(scores[top_idx]),
                 'score_max': float(scores[top_idx]),
+                'patch_indices': [top_idx],
             }
         )
 
@@ -368,26 +372,92 @@ def generate_connected_rois(coords, scores, patch_size_level0, roi_percentile, m
     return rois
 
 
-def draw_rois_on_wsi(wsi_path, rois, level, output_path):
+def draw_rois_on_wsi(wsi_path, rois, coords, patch_size_level0, level, output_path, contour_alpha, contour_thickness):
     slide = openslide.OpenSlide(wsi_path)
 
     downscale_factor = float(slide.level_downsamples[level])
     wsi_size = slide.level_dimensions[level]
     wsi_img = slide.read_region((0, 0), level, wsi_size).convert('RGB')
-    wsi_np = np.array(wsi_img)
+    base_img = np.array(wsi_img)
+    h, w = base_img.shape[:2]
+    fill_layer = np.zeros_like(base_img)
+
+    patch_size_level = max(1, int(round(float(patch_size_level0) / downscale_factor)))
+    palette = [
+        (255, 0, 0),
+        (255, 128, 0),
+        (255, 255, 0),
+        (0, 200, 255),
+        (0, 255, 0),
+        (0, 128, 255),
+    ]
 
     for roi in rois:
-        x0 = int(roi['x_min'] / downscale_factor)
-        y0 = int(roi['y_min'] / downscale_factor)
-        x1 = int(roi['x_max'] / downscale_factor)
-        y1 = int(roi['y_max'] / downscale_factor)
+        roi_mask = np.zeros((h, w), dtype=np.uint8)
+        patch_indices = roi.get('patch_indices', [])
+        for idx in patch_indices:
+            if idx < 0 or idx >= coords.shape[0]:
+                continue
+            x0 = int(round(float(coords[idx, 0]) / downscale_factor))
+            y0 = int(round(float(coords[idx, 1]) / downscale_factor))
+            x1 = min(w, x0 + patch_size_level)
+            y1 = min(h, y0 + patch_size_level)
+            if x0 >= w or y0 >= h or x1 <= 0 or y1 <= 0:
+                continue
+            x0 = max(0, x0)
+            y0 = max(0, y0)
+            roi_mask[y0:y1, x0:x1] = 255
 
-        cv2.rectangle(wsi_np, (x0, y0), (x1, y1), color=(255, 0, 0), thickness=4)
+        if roi_mask.sum() == 0:
+            continue
+
+        kernel = np.ones((3, 3), dtype=np.uint8)
+        roi_mask = cv2.morphologyEx(roi_mask, cv2.MORPH_CLOSE, kernel)
+        contours, _ = cv2.findContours(roi_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if len(contours) == 0:
+            continue
+
+        color = palette[(int(roi['roi_id']) - 1) % len(palette)]
+        cv2.drawContours(fill_layer, contours, -1, color, thickness=cv2.FILLED)
+
+    contour_alpha = float(np.clip(contour_alpha, 0.0, 1.0))
+    out_img = cv2.addWeighted(base_img, 1.0, fill_layer, contour_alpha, 0.0)
+
+    for roi in rois:
+        roi_mask = np.zeros((h, w), dtype=np.uint8)
+        patch_indices = roi.get('patch_indices', [])
+        for idx in patch_indices:
+            if idx < 0 or idx >= coords.shape[0]:
+                continue
+            x0 = int(round(float(coords[idx, 0]) / downscale_factor))
+            y0 = int(round(float(coords[idx, 1]) / downscale_factor))
+            x1 = min(w, x0 + patch_size_level)
+            y1 = min(h, y0 + patch_size_level)
+            if x0 >= w or y0 >= h or x1 <= 0 or y1 <= 0:
+                continue
+            x0 = max(0, x0)
+            y0 = max(0, y0)
+            roi_mask[y0:y1, x0:x1] = 255
+
+        if roi_mask.sum() == 0:
+            continue
+
+        kernel = np.ones((3, 3), dtype=np.uint8)
+        roi_mask = cv2.morphologyEx(roi_mask, cv2.MORPH_CLOSE, kernel)
+        contours, _ = cv2.findContours(roi_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if len(contours) == 0:
+            continue
+
+        color = palette[(int(roi['roi_id']) - 1) % len(palette)]
+        cv2.drawContours(out_img, contours, -1, color, thickness=max(1, int(contour_thickness)))
+
+        largest = max(contours, key=cv2.contourArea)
+        x_lbl, y_lbl, _, _ = cv2.boundingRect(largest)
         label = f"ROI-{roi['roi_id']}"
-        cv2.putText(wsi_np, label, (x0, max(20, y0 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 0), 2, cv2.LINE_AA)
+        cv2.putText(out_img, label, (x_lbl, max(20, y_lbl - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2, cv2.LINE_AA)
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    cv2.imwrite(output_path, cv2.cvtColor(wsi_np, cv2.COLOR_RGB2BGR))
+    cv2.imwrite(output_path, cv2.cvtColor(out_img, cv2.COLOR_RGB2BGR))
     return downscale_factor
 
 
@@ -397,11 +467,15 @@ def save_roi_files(rois, output_dir, slide_name):
     csv_path = os.path.join(output_dir, f'{slide_name}_roi.csv')
     json_path = os.path.join(output_dir, f'{slide_name}_roi.json')
 
-    df = pd.DataFrame(rois)
+    exportable_rois = []
+    for roi in rois:
+        exportable_rois.append({k: v for k, v in roi.items() if k != 'patch_indices'})
+
+    df = pd.DataFrame(exportable_rois)
     df.to_csv(csv_path, index=False)
 
     with open(json_path, 'w', encoding='utf-8') as f:
-        json.dump(rois, f, indent=2)
+        json.dump(exportable_rois, f, indent=2)
 
     return csv_path, json_path
 
@@ -446,7 +520,16 @@ def main():
     ensure_path_exists(wsi_path, 'wsi_path', expect_dir=False)
 
     overlay_path = os.path.join(args.output_dir_path, f'{args.slide_name}_roi_overlay.png')
-    draw_rois_on_wsi(wsi_path=wsi_path, rois=rois, level=args.level, output_path=overlay_path)
+    draw_rois_on_wsi(
+        wsi_path=wsi_path,
+        rois=rois,
+        coords=coords,
+        patch_size_level0=args.patch_size_level0,
+        level=args.level,
+        output_path=overlay_path,
+        contour_alpha=args.contour_alpha,
+        contour_thickness=args.contour_thickness,
+    )
 
     csv_path, json_path = save_roi_files(rois, args.output_dir_path, args.slide_name)
 
