@@ -261,6 +261,19 @@ Evaluate model with feature extraction
 python step7_inference_with_fe.py --config config/camelyon_sasha_inference_with_fe.yml --seed 4 --save_dir SAVE_DIR
 ```
 
+## Step 10 ROI Annotation (Doctor Review)
+
+Step 10 creates a review-friendly ROI overlay directly on the original WSI and exports ROI coordinates.
+
+```eval
+python step10_roi_annotation.py --config config/camelyon_sasha_inference.yml --slide_name test_068 --ext tif --wsi_images_dir_path "$SASHA_SOURCE_DIR" --output_dir_path /mnt/nas/Dataset/sasha_outputs/roi_annotations/test_068 --seed 1
+```
+
+Outputs:
+- `<slide_name>_roi_overlay.png` : WSI with ROI rectangles
+- `<slide_name>_roi.csv` : ROI coordinates in level-0 pixels
+- `<slide_name>_roi.json` : ROI metadata
+
 Note : For TCGA-NSCL dataset similar config files are present in config/ folder.
 
 
