@@ -161,6 +161,110 @@ def resolve_wsi_file_path(slide_name, ext, requested_dir=None, nas_root=None):
     )
 
 
+def resolve_feature_dir_with_fallback(configured_dir, role_name, pretrain, nas_root=None):
+    expected_h5 = f'patch_feats_pretrain_{pretrain}.h5'
+    role_name = str(role_name)
+
+    def _norm(path):
+        return os.path.normpath(path)
+
+    configured_dir = resolve_path(configured_dir, nas_root=nas_root, base_dir=os.getcwd())
+    if os.path.isdir(configured_dir) and os.path.isfile(os.path.join(configured_dir, expected_h5)):
+        return configured_dir
+
+    candidates = [configured_dir, os.path.dirname(configured_dir)]
+
+    if nas_root:
+        candidates.extend(
+            [
+                os.path.join(nas_root, 'sasha_outputs', 'features'),
+                os.path.join(nas_root, 'features'),
+            ]
+        )
+
+        nas_parent = os.path.dirname(nas_root.rstrip('/\\'))
+        if nas_parent:
+            candidates.extend(
+                [
+                    os.path.join(nas_parent, 'Dataset', 'sasha_outputs', 'features'),
+                    os.path.join(nas_parent, 'sasha_outputs', 'features'),
+                ]
+            )
+
+    candidates.extend(
+        [
+            os.path.join(os.getcwd(), 'sasha_outputs', 'features'),
+            '/mnt/nas/Dataset/sasha_outputs/features',
+            '/mnt/nas/sasha_outputs/features',
+        ]
+    )
+
+    checked_roots = []
+    existing_roots = []
+    seen = set()
+    found_dirs = []
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        root = resolve_path(candidate, nas_root=nas_root, base_dir=os.getcwd())
+        root = _norm(root)
+        if root in seen:
+            continue
+        seen.add(root)
+        checked_roots.append(root)
+
+        if not os.path.isdir(root):
+            continue
+        existing_roots.append(root)
+
+        direct_h5 = os.path.join(root, expected_h5)
+        if os.path.isfile(direct_h5):
+            found_dirs.append(root)
+
+        for walk_root, _, files in os.walk(root):
+            if expected_h5 in files:
+                found_dirs.append(_norm(walk_root))
+
+    found_dirs = sorted(set(found_dirs))
+    if not found_dirs:
+        raise FileNotFoundError(
+            f"Could not locate '{expected_h5}' for {role_name}. "
+            f"Configured path: {configured_dir}. Checked roots: {checked_roots}. "
+            f"Existing roots: {existing_roots}."
+        )
+
+    def _score_dir(path):
+        p = path.lower().replace('\\', '/')
+        score = 0
+        if role_name == 'level1_path':
+            if 'intermediate' in p:
+                score += 5
+            if 'hafed' in p:
+                score += 4
+            if '/lr/' in p or '/lr' in p:
+                score -= 3
+            if 'level3' in p:
+                score -= 3
+        elif role_name == 'level3_path':
+            if '/lr/' in p or '/lr' in p:
+                score += 5
+            if 'h5_files' in p:
+                score += 3
+            if 'level3' in p:
+                score += 2
+            if 'intermediate' in p:
+                score -= 3
+        if path == configured_dir:
+            score += 1
+        return score
+
+    best_dir = max(found_dirs, key=_score_dir)
+    print(f"[WARN] {role_name} not found at configured path: {configured_dir}")
+    print(f"[INFO] Auto-resolved {role_name}: {best_dir}")
+    return best_dir
+
+
 def load_pipeline(args):
     with open(args.config, 'r') as ymlfile:
         c = yaml.load(ymlfile, Loader=yaml.FullLoader)
@@ -172,6 +276,19 @@ def load_pipeline(args):
     conf.classifier_ckpt_path = resolve_checkpoint_with_fallback(conf.classifier_ckpt_path, 'classifier_ckpt_path')
     conf.mlp_fglobal_ckpt = resolve_checkpoint_with_fallback(conf.mlp_fglobal_ckpt, 'mlp_fglobal_ckpt')
     conf.rl_ckpt_path = resolve_checkpoint_with_fallback(conf.rl_ckpt_path, 'rl_ckpt_path')
+
+    conf.level1_path = resolve_feature_dir_with_fallback(
+        configured_dir=conf.level1_path,
+        role_name='level1_path',
+        pretrain=conf.pretrain,
+        nas_root=os.environ.get('SASHA_NAS_ROOT'),
+    )
+    conf.level3_path = resolve_feature_dir_with_fallback(
+        configured_dir=conf.level3_path,
+        role_name='level3_path',
+        pretrain=conf.pretrain,
+        nas_root=os.environ.get('SASHA_NAS_ROOT'),
+    )
 
     ensure_path_exists(conf.level1_path, 'level1_path', expect_dir=True)
     ensure_path_exists(conf.level3_path, 'level3_path', expect_dir=True)
@@ -218,12 +335,19 @@ def load_pipeline(args):
     return conf, test_loader, classifier, fglobal, model
 
 
-def get_slide_coords(features_path, slide_name):
-    h5_files = [f for f in os.listdir(features_path) if f.endswith('.h5')]
-    if len(h5_files) != 1:
-        raise RuntimeError(f'Expected exactly one .h5 file under {features_path}, found {len(h5_files)}')
+def get_slide_coords(features_path, slide_name, pretrain=None):
+    h5_files = sorted([f for f in os.listdir(features_path) if f.endswith('.h5')])
+    if len(h5_files) == 0:
+        raise RuntimeError(f'No .h5 files found under {features_path}')
 
-    h5_file_path = os.path.join(features_path, h5_files[0])
+    preferred = None
+    if pretrain is not None:
+        preferred_name = f'patch_feats_pretrain_{pretrain}.h5'
+        if preferred_name in h5_files:
+            preferred = preferred_name
+
+    h5_file = preferred if preferred is not None else h5_files[0]
+    h5_file_path = os.path.join(features_path, h5_file)
     with h5py.File(h5_file_path, 'r') as f:
         if slide_name not in f:
             raise KeyError(f"Slide '{slide_name}' not found in {h5_file_path}")
@@ -314,7 +438,7 @@ def evaluate_policy_for_slide(model, fglobal, classifier, data_loader, device, c
     if not found:
         raise ValueError(f"Slide '{slide_name}' not found in test split for seed={conf.seed}")
 
-    coords = get_slide_coords(conf.level3_path, slide_name)
+    coords = get_slide_coords(conf.level3_path, slide_name, pretrain=conf.pretrain)
     attention_scores = extract_patch_attention(final_attn, coords.shape[0])
 
     return coords, selected_indices, similar_groups, attention_scores
