@@ -51,6 +51,8 @@ def get_arguments() :
     # Fall back to conventional locations under SASHA_NAS_ROOT when CLI args are omitted.
     if args.wsi_images_dir_path is None and os.environ.get('SASHA_SOURCE_DIR'):
         args.wsi_images_dir_path = os.environ['SASHA_SOURCE_DIR']
+    if args.annotation_dir_path is None and nas_root:
+        args.annotation_dir_path = os.path.join(nas_root, 'annotations')
     if args.output_dir_path is None and nas_root:
         args.output_dir_path = os.path.join(nas_root, 'sasha_outputs', 'visualizations', args.slide_name)
 
@@ -308,6 +310,15 @@ def draw_annotation_contours(
     wsi_size = slide.level_dimensions[level]
     wsi_img = slide.read_region((0, 0), level, wsi_size).convert("RGB")
     wsi_np = np.array(wsi_img)
+
+    if not xml_path or not os.path.exists(xml_path):
+        print(f"[WARN] Annotation XML not found at: {xml_path}. Proceeding without annotation contours.")
+        if is_save:
+            annotated_img = Image.fromarray(wsi_np)
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            annotated_img.save(save_path)
+            print(f"WSI image saved without annotations at: {save_path}")
+        return wsi_np, downscale_factor
 
     # Parse XML annotations
     tree = ET.parse(xml_path)
