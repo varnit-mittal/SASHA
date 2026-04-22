@@ -102,6 +102,65 @@ def resolve_checkpoint_with_fallback(path, field_name):
     return path
 
 
+def resolve_wsi_file_path(slide_name, ext, requested_dir=None, nas_root=None):
+    file_name = f'{slide_name}.{ext}'
+    candidates = []
+
+    if requested_dir:
+        candidates.append(requested_dir)
+
+    env_source_dir = os.environ.get('SASHA_SOURCE_DIR')
+    if env_source_dir:
+        candidates.append(env_source_dir)
+
+    if nas_root:
+        candidates.append(nas_root)
+        candidates.append(os.path.join(nas_root, 'raw_wsi'))
+
+        nas_parent = os.path.dirname(nas_root.rstrip('/\\'))
+        if nas_parent:
+            candidates.append(nas_parent)
+            candidates.append(os.path.join(nas_parent, 'Dataset'))
+            candidates.append(os.path.join(nas_parent, 'Dataset', 'raw_wsi'))
+
+    candidates.extend([
+        '/mnt/nas/Dataset/raw_wsi',
+        '/mnt/nas/Dataset',
+        '/mnt/nas',
+    ])
+
+    seen = set()
+    checked_dirs = []
+    existing_dirs = []
+    for path in candidates:
+        if path is None:
+            continue
+        resolved = resolve_path(path, nas_root=nas_root, base_dir=os.getcwd())
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        checked_dirs.append(resolved)
+        if not os.path.isdir(resolved):
+            continue
+        existing_dirs.append(resolved)
+
+        direct_path = os.path.join(resolved, file_name)
+        if os.path.isfile(direct_path):
+            return direct_path
+
+    # Fallback: recursive lookup under existing roots.
+    for root_dir in existing_dirs:
+        for root, _, files in os.walk(root_dir):
+            if file_name in files:
+                return os.path.join(root, file_name)
+
+    raise FileNotFoundError(
+        f"Could not find slide file '{file_name}'. Checked directories: {checked_dirs}. "
+        f"Existing directories among them: {existing_dirs}. "
+        f"Pass --wsi_images_dir_path explicitly to the directory containing '{file_name}'."
+    )
+
+
 def load_pipeline(args):
     with open(args.config, 'r') as ymlfile:
         c = yaml.load(ymlfile, Loader=yaml.FullLoader)
@@ -484,7 +543,6 @@ def main():
     args = get_arguments()
 
     ensure_path_exists(args.config, 'config', expect_dir=False)
-    ensure_path_exists(args.wsi_images_dir_path, 'wsi_images_dir_path', expect_dir=True)
 
     conf, test_loader, classifier, fglobal, model = load_pipeline(args)
 
@@ -516,8 +574,13 @@ def main():
         min_roi_patches=args.min_roi_patches,
     )
 
-    wsi_path = os.path.join(args.wsi_images_dir_path, f'{args.slide_name}.{args.ext}')
-    ensure_path_exists(wsi_path, 'wsi_path', expect_dir=False)
+    wsi_path = resolve_wsi_file_path(
+        slide_name=args.slide_name,
+        ext=args.ext,
+        requested_dir=args.wsi_images_dir_path,
+        nas_root=os.environ.get('SASHA_NAS_ROOT'),
+    )
+    print(f'[INFO] Using WSI file: {wsi_path}')
 
     overlay_path = os.path.join(args.output_dir_path, f'{args.slide_name}_roi_overlay.png')
     draw_rois_on_wsi(
