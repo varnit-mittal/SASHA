@@ -58,7 +58,8 @@ def get_arguments() :
     args.wsi_images_dir_path = resolve_path(args.wsi_images_dir_path, nas_root=nas_root, base_dir=os.getcwd())
     args.annotation_dir_path = resolve_path(args.annotation_dir_path, nas_root=nas_root, base_dir=os.getcwd())
     args.output_dir_path = resolve_path(args.output_dir_path, nas_root=nas_root, base_dir=os.getcwd())
-    args.config = resolve_path(args.config, nas_root=nas_root, base_dir=os.getcwd())
+    # Config files live in the local repo, so resolve them from CWD instead of NAS root.
+    args.config = resolve_path(args.config, nas_root=None, base_dir=os.getcwd())
 
     # Adding Device Details
     gpus = check_gpu_availability(3, 1, [])
