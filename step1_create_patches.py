@@ -307,6 +307,20 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
         patch_time_elapsed = -1  # Default time
 
         if patch:
+            # Some slides (e.g. TCGA glioma 20x scans) have fewer pyramid
+            # levels than the requested `patch_level`. Skip them gracefully
+            # instead of crashing the whole run on an IndexError inside
+            # WholeSlideImage.process_contour.
+            n_levels = len(WSI_object.level_dim)
+            if patch_level >= n_levels:
+                print(
+                    f"[WARN] {slide_id}: requested patch_level={patch_level} but "
+                    f"slide only has {n_levels} pyramid levels {list(WSI_object.level_dim)}. "
+                    f"Skipping (status='unsupported_patch_level')."
+                )
+                df.loc[idx, 'status'] = 'unsupported_patch_level'
+                continue
+
             current_patch_params.update({'patch_level': patch_level, 'patch_size': patch_size, 'step_size': step_size,
                                          'save_path': patch_save_dir})
             file_path, patch_time_elapsed = patching(WSI_object=WSI_object, **current_patch_params, )
