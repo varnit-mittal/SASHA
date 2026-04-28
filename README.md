@@ -311,27 +311,52 @@ This writes:
 - `dataset_csv/glioma3/glioma3.csv` (`case_id,slide_id,label`, `slide_id` ends in `.svs`).
 - `dataset_csv/glioma3/splits/split_<seed>.json` and `split_<seed>_summary.txt`.
 
-### 2. Patch and feature extraction (.svs)
+### 2. Configure paths
+
+The repo ships with a project-level `.env` that already wires up the
+glioma3 layout for the Ubuntu host (`/mnt/nas/glioma_slides`):
 
 ```bash
-python step1_create_patches.py --source SOURCE_DIR --save_dir SAVE_DIR --extension svs --patch_level 2
+SASHA_NAS_ROOT=/mnt/nas
+SASHA_SOURCE_DIR=/mnt/nas/glioma_slides
+SASHA_SAVE_DIR=/mnt/nas/sasha_outputs/glioma3/step1
+SASHA_FEAT_DIR=/mnt/nas/sasha_outputs/glioma3/features
+SASHA_LOG_DIR=/mnt/nas/sasha_outputs/glioma3/logs
+SASHA_REPO=/home/pathousr2/varnit/SASHA   # update if the repo lives elsewhere
+```
+
+Load these into the current shell before running step1/step2 (every other
+step reads them automatically via `utils/path_utils.py`):
+
+```bash
+set -a
+source .env
+set +a
+```
+
+### 3. Patch and feature extraction (.svs)
+
+```bash
+python step1_create_patches.py \
+    --source "$SASHA_SOURCE_DIR" \
+    --save_dir "$SASHA_SAVE_DIR" \
+    --extension svs \
+    --patch_level 2
 
 python step2_extract_features.py \
     --dataset_name glioma3 \
-    --data_h5_dir SAVE_DIR \
-    --data_slide_dir WSI_IMAGES_DIR \
+    --data_h5_dir "$SASHA_SAVE_DIR" \
+    --data_slide_dir "$SASHA_SOURCE_DIR" \
     --slide_ext .svs \
     --csv_path dataset_csv/glioma3/glioma3.csv \
-    --feat_dir FEAT_DIR_TO_SAVE \
+    --feat_dir "$SASHA_FEAT_DIR" \
     --batch_size 32 \
     --extract_high_res_features True \
     --patch_level_low_res 2 \
     --patch_level_high_res 1
 ```
 
-### 3. HAFED training and intermediate features (3-class)
-
-Edit `config/glioma3_config.yml` and set `data_dir` to `<FEAT_DIR_TO_SAVE>/hr/h5_files`.
+### 4. HAFED training and intermediate features (3-class)
 
 ```bash
 python step3_WSI_classification_HAFED.py \
@@ -339,39 +364,32 @@ python step3_WSI_classification_HAFED.py \
     --seed 1 \
     --arch hafed \
     --exp_name DEBUG \
-    --log_dir outputs/glioma3_hafed
+    --log_dir "$SASHA_LOG_DIR/glioma3_hafed"
 
 python step4_extract_intermediate_features.py \
     --config config/glioma3_config.yml \
     --seed 1 \
     --arch hafed \
-    --ckpt_path outputs/glioma3_hafed/models/DEBUG/checkpoint-best.pt \
-    --output_path features/glioma3_hr_intermediate
+    --ckpt_path "$SASHA_LOG_DIR/glioma3_hafed/models/DEBUG/checkpoint-best.pt" \
+    --output_path "$SASHA_FEAT_DIR/intermediate_hafed"
 ```
 
-### 4. TSU + RL training
-
-Edit `config/glioma3_tsu_config.yml` and `config/glioma3_rl_config.yml` so:
-- `level1_path` points to the directory written by step4
-  (`features/glioma3_hr_intermediate`).
-- `level3_path` points to `<FEAT_DIR_TO_SAVE>/lr/h5_files`.
-- `classifier_ckpt_path` and `mlp_fglobal_ckpt` point to the matching
-  checkpoint files when running step6/step7.
+### 5. TSU + RL training
 
 ```bash
 python step5_tsu_training.py \
     --config config/glioma3_tsu_config.yml \
     --seed 1 \
     --arch hafed \
-    --log_dir outputs/glioma3_tsu
+    --log_dir "$SASHA_LOG_DIR/glioma3_tsu"
 
 python step6_rl_training.py \
     --config config/glioma3_rl_config.yml \
     --seed 1 \
-    --log_dir outputs/glioma3_rl
+    --log_dir "$SASHA_LOG_DIR/glioma3_rl"
 ```
 
-### 5. SASHA inference
+### 6. SASHA inference
 
 ```bash
 python step7_inference.py --config config/glioma3_sasha_inference.yml --seed 1
@@ -383,7 +401,7 @@ For end-to-end inference (feature extraction + sampling) on new `.svs`:
 python step7_inference_with_fe.py \
     --config config/glioma3_sasha_inference_with_fe.yml \
     --seed 1 \
-    --save_dir outputs/glioma3_sasha_runs
+    --save_dir "$SASHA_LOG_DIR/glioma3_sasha_runs"
 ```
 
 ### Multiclass metric notes

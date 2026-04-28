@@ -5,7 +5,7 @@ B: 1
 
 # Dataset details
 dataset: glioma3
-nas_root:                                 # optional NAS root, e.g. \\172.16.202.70\my_share
+nas_root: /mnt/nas         # prefixes relative paths below
 fglobal: 'mlp'
 n_class: 3
 
@@ -17,16 +17,18 @@ D_inner: 128
 only_ce_as_reward: True
 
 # Raw images and patch h5 directory
-source: raw_wsi
-data_h5_dir : sasha_outputs/step1
-csv_path : dataset_csv/glioma3/glioma3.csv
+source: glioma_slides                              # resolves to /mnt/nas/glioma_slides via SASHA_NAS_ROOT
+data_h5_dir: sasha_outputs/glioma3/step1
+# csv_path lives inside the repo, not on the NAS. Use ${SASHA_REPO} (set in .env)
+# or replace with the absolute path on this machine, e.g. /home/pathousr2/varnit/SASHA/dataset_csv/glioma3/glioma3.csv
+csv_path: ${SASHA_REPO}/dataset_csv/glioma3/glioma3.csv
 
 # Model weights
 frac_visit: 0.2
 cosine_threshold: 0.95
-classifier_ckpt_path: sasha_outputs/logs/glioma3_hafed/models/DEBUG/checkpoint-best.pt
-mlp_fglobal_ckpt:     sasha_outputs/logs/glioma3_tsu/models/DEBUG/checkpoint-best.pt
-rl_ckpt_path:         sasha_outputs/logs/glioma3_rl/cosine_0.95_frac_0.2_seed_4/models/DEBUG/checkpoint-best.pt
+classifier_ckpt_path: sasha_outputs/glioma3/logs/glioma3_hafed/models/DEBUG/checkpoint-best.pt
+mlp_fglobal_ckpt:     sasha_outputs/glioma3/logs/glioma3_tsu/models/DEBUG/checkpoint-best.pt
+rl_ckpt_path:         sasha_outputs/glioma3/logs/glioma3_rl/cosine_0.95_frac_0.2_seed_4/models/DEBUG/checkpoint-best.pt
 
 # Extra hyperparameters
 n_worker: 8

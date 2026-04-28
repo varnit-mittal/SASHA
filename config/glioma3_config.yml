@@ -24,10 +24,10 @@ mask_drop: 0.4
 
 # Dataset
 dataset: glioma3
-nas_root:                              # optional NAS root, e.g. \\172.16.202.70\my_share
-n_class: 3                             # subtype_1 / subtype_2 / subtype_3
-data_dir:                              # path to high-resolution h5 features (output of step2)
-data_csv: dataset_csv/glioma3/glioma3.csv
+nas_root: /mnt/nas                                     # prefixes any relative path below
+n_class: 3                                             # subtype_1 / subtype_2 / subtype_3
+data_dir: sasha_outputs/glioma3/features/hr/h5_files   # high-res h5 features written by step2
+data_csv:                                              # not used by split_dataset_glioma3 (splits live in dataset_csv/glioma3/splits)
 
 ## Pretrained backbone
 backbone: 'ViT-S/16'   #'ResNet_50' 'ViT-S/16'

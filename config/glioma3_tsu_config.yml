@@ -12,13 +12,13 @@ min_lr: 0
 frac: 0.2
 cosine_threshold: 0.95
 dataset: glioma3
-nas_root:                        # optional NAS root, e.g. \\172.16.202.70\my_share
+nas_root: /mnt/nas               # prefixes relative paths below
 n_class: 3
 
 
-ckpt_path:     # HAFED checkpoint .pt path (output of step3)
-level1_path:   # Intermediate features path created in step4
-level3_path:   # Low-resolution feature space from feature extractor (step2)
+ckpt_path:                                             # HAFED checkpoint (output of step3)
+level1_path: sasha_outputs/glioma3/features/intermediate_hafed   # written by step4
+level3_path: sasha_outputs/glioma3/features/lr/h5_files          # low-res features from step2
 
 
 # Other hyperparameters

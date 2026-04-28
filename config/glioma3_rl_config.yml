@@ -24,7 +24,7 @@ lam: 0.95
 
 # Dataset details
 dataset: glioma3
-nas_root:         # optional NAS root, e.g. \\172.16.202.70\my_share
+nas_root: /mnt/nas         # prefixes relative paths below
 fglobal: 'mlp'
 n_class: 3
 
@@ -38,10 +38,10 @@ D_inner: 128
 # Model weights -
 frac_visit: 0.2
 cosine_threshold: 0.95
-classifier_ckpt_path:         # HAFED classifier ckpt path (output of step3)
-mlp_fglobal_ckpt :            # TSU model checkpoint path (output of step5; cosine_threshold must match)
-level1_path:                  # HAFED intermediate feature representation path (output of step4)
-level3_path:                  # Low-resolution feature path (output of step2)
+classifier_ckpt_path: sasha_outputs/glioma3/logs/glioma3_hafed/models/DEBUG/checkpoint-best.pt   # output of step3
+mlp_fglobal_ckpt:     sasha_outputs/glioma3/logs/glioma3_tsu/models/DEBUG/checkpoint-best.pt    # output of step5 (cosine_threshold must match)
+level1_path: sasha_outputs/glioma3/features/intermediate_hafed                                  # output of step4
+level3_path: sasha_outputs/glioma3/features/lr/h5_files                                         # output of step2
 
 
 # Restart training
