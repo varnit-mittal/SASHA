@@ -150,7 +150,7 @@ class Whole_Slide_Bag_FP(Dataset):
                         'lr_time': end_time_lr - start_time_lr  # Op : 1
                     }
 
-                elif self.dataset_name == 'tcga':
+                elif self.dataset_name in ('tcga', 'glioma3'):
                     high_resolution_imgs = []
                     high_resolution_coords = []
 

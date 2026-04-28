@@ -104,6 +104,42 @@ def split_dataset_tcga(file_path, conf):
     return train_split, train_names, val_split, val_names, test_split, test_names
 
 
+def split_dataset_glioma3(file_path, conf):
+    """3-class glioma subtype dataset (subtype_1 / subtype_2 / subtype_3).
+
+    Slides are stored in TCGA-style `.svs` files; the underlying h5 layout
+    written by step2 is identical to TCGA, so the loader mirrors
+    `split_dataset_tcga` but uses the dataset-specific splits/CSV under
+    `dataset_csv/glioma3`.
+    """
+
+    h5_data = h5py.File(os.path.join(file_path, f'patch_feats_pretrain_{conf.pretrain}.h5'), 'r')
+
+    split_file_path = './dataset_csv/%s/splits/split_%s.json' % (conf.dataset, conf.seed)
+
+    if os.path.exists(split_file_path):
+        with open(split_file_path, 'r') as json_file:
+            data = json.load(json_file)
+        train_names, val_names, test_names = data['train_names'], data['val_names'], data['test_names']
+    else:
+        print(f"Enter a valid split path : {split_file_path}")
+        exit()
+
+    train_split, val_split, test_split = {}, {}, {}
+    for (names, split) in [(train_names, train_split), (val_names, val_split), (test_names, test_split)]:
+        for name in names:
+            slide = h5_data[name]
+
+            label = slide.attrs['label']
+            feat = slide['feat'][:]
+            coords = slide['coords'][:]
+
+            split[name] = {'input': feat, 'coords': coords, 'label': label}
+
+    h5_data.close()
+    return train_split, train_names, val_split, val_names, test_split, test_names
+
+
 def split_dataset_fglobal_tcga(file_path_level1, file_path_level3, conf):
 
     h5_data_level1 = h5py.File(os.path.join(file_path_level1, f'patch_feats_pretrain_{conf.pretrain}.h5'), 'r')
@@ -127,6 +163,42 @@ def split_dataset_fglobal_tcga(file_path_level1, file_path_level3, conf):
         for name in names:
             slide1 = h5_data_level1[name]
 
+            label = slide1.attrs['label']
+            feat1 = slide1['feat'][:]
+
+            slide3 = h5_data_level3[name]
+            feat3 = slide3['feat'][:]
+
+            split1[name] = {'input': feat1, 'label': label}
+            split3[name] = {'input': feat3, 'label': label}
+
+    h5_data_level1.close()
+    h5_data_level3.close()
+    return train_split1, train_split3, train_names, val_split1, val_split3, val_names, test_split1, test_split3, test_names
+
+
+def split_dataset_fglobal_glioma3(file_path_level1, file_path_level3, conf):
+    """Two-resolution loader for glioma3 (mirrors `split_dataset_fglobal_tcga`)."""
+
+    h5_data_level1 = h5py.File(os.path.join(file_path_level1, f'patch_feats_pretrain_{conf.pretrain}.h5'), 'r')
+    h5_data_level3 = h5py.File(os.path.join(file_path_level3, f'patch_feats_pretrain_{conf.pretrain}.h5'), 'r')
+
+    split_file_path = './dataset_csv/%s/splits/split_%s.json' % (conf.dataset, conf.seed)
+
+    if os.path.exists(split_file_path):
+        with open(split_file_path, 'r') as json_file:
+            data = json.load(json_file)
+        train_names, val_names, test_names = data['train_names'], data['val_names'], data['test_names']
+    else:
+        print(f"Enter a valid split path : {split_file_path}")
+        exit()
+
+    train_split1, val_split1, test_split1 = {}, {}, {}
+    train_split3, val_split3, test_split3 = {}, {}, {}
+    for (names, split1, split3) in [(train_names, train_split1, train_split3), (val_names, val_split1, val_split3),
+                                    (test_names, test_split1, test_split3)]:
+        for name in names:
+            slide1 = h5_data_level1[name]
             label = slide1.attrs['label']
             feat1 = slide1['feat'][:]
 
@@ -297,6 +369,11 @@ def build_HDF5_feat_dataset(file_path, conf):
         train_split, train_names = generate_fewshot_dataset(train_split, train_names, num_shots=conf.n_shot)
         return HDF5_feat_dataset2(train_split, train_names), HDF5_feat_dataset2(val_split,val_names), HDF5_feat_dataset2(test_split, test_names)
 
+    elif conf.dataset == 'glioma3':
+        train_split, train_names, val_split, val_names, test_split, test_names = split_dataset_glioma3(file_path, conf)
+        train_split, train_names = generate_fewshot_dataset(train_split, train_names, num_shots=conf.n_shot)
+        return HDF5_feat_dataset2(train_split, train_names), HDF5_feat_dataset2(val_split, val_names), HDF5_feat_dataset2(test_split, test_names)
+
     elif conf.dataset == 'bracs':
         train_split, train_names, val_split, val_names, test_split, test_names = split_dataset_bracs(file_path, conf)
         train_split, train_names = generate_fewshot_dataset(train_split, train_names, num_shots=conf.n_shot)
@@ -317,6 +394,10 @@ def build_HDF5_feat_dataset_2(file_path_level1, file_path_level3, conf):
     elif conf.dataset == 'tcga' :
         train_split1, train_split3, train_names, val_split1, val_split3, val_names, test_split1, test_split3, test_names = split_dataset_fglobal_tcga(file_path_level1, file_path_level3, conf)
         return HDF5_feat_dataset4(train_split1, train_split3, train_names), HDF5_feat_dataset4(val_split1, val_split3,val_names), HDF5_feat_dataset4(test_split1, test_split3, test_names)
+
+    elif conf.dataset == 'glioma3':
+        train_split1, train_split3, train_names, val_split1, val_split3, val_names, test_split1, test_split3, test_names = split_dataset_fglobal_glioma3(file_path_level1, file_path_level3, conf)
+        return HDF5_feat_dataset4(train_split1, train_split3, train_names), HDF5_feat_dataset4(val_split1, val_split3, val_names), HDF5_feat_dataset4(test_split1, test_split3, test_names)
 
 
 

@@ -243,7 +243,7 @@ def get_arguments() :
     parser = argparse.ArgumentParser(description='Feature Extraction')
 
     # Primary Arguments 
-    parser.add_argument('--dataset_name', type=str, default=None, choices=['camelyon16', 'tcga'])
+    parser.add_argument('--dataset_name', type=str, default=None, choices=['camelyon16', 'tcga', 'glioma3'])
     parser.add_argument('--data_h5_dir', type=str, default= None)
     parser.add_argument('--data_slide_dir', type=str, default= None)
     parser.add_argument('--slide_ext', type=str, default=".svs",help="we have two options *.tif, *.svs, or any other compatible can work")

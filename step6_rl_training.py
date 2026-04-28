@@ -25,9 +25,7 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 import torch.nn as nn
-import torchmetrics
 import yaml
-from sklearn.metrics import balanced_accuracy_score
 from timm.utils import accuracy
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -40,6 +38,13 @@ from modules.fglobal_mlp import FGlobal
 from rl_algorithms.ppo import Agent, Actor, Critic
 from step4_extract_intermediate_features import load_model
 from utils.gpu_utils import check_gpu_availability
+from utils.metrics import (
+    compute_auroc,
+    compute_balanced_accuracy,
+    compute_f1,
+    compute_precision,
+    compute_recall,
+)
 from utils.path_utils import ensure_path_exists, resolve_conf_paths
 from utils.utils import MetricLogger, SmoothedValue, adjust_learning_rate
 from utils.utils import save_policy_model, Struct, set_seed
@@ -478,24 +483,11 @@ def evaluate_policy(model, fglobal, classifier, data_loader, header, device, epo
     y_pred = torch.cat(y_pred, dim=0)
     y_true = torch.cat(y_true, dim=0)
     y_pred_labels = torch.argmax(y_pred, dim=-1)
-    AUROC_metric = torchmetrics.AUROC(task='binary').to(device)
-    AUROC_metric(y_pred[:, 1], y_true)
-    auroc = AUROC_metric.compute().item()
-    F1_metric = torchmetrics.F1Score(task='binary').to(device)
-    F1_metric(y_pred_labels, y_true)
-    f1_score = F1_metric.compute().item()
-
-    Precision_metric = torchmetrics.Precision(task='binary').to(device)
-    Precision_metric(y_pred_labels, y_true)
-    precision = Precision_metric.compute().item()
-
-    Recall_metric = torchmetrics.Recall(task='binary').to(device)
-    Recall_metric(y_pred_labels, y_true)
-    recall = Recall_metric.compute().item()
-
-    y_pred_np = y_pred_labels.cpu().numpy()
-    y_true_np = y_true.cpu().numpy()
-    balanced_acc = balanced_accuracy_score(y_true_np, y_pred_np)
+    auroc = compute_auroc(y_pred, y_true, conf.n_class)
+    f1_score = compute_f1(y_pred_labels, y_true, conf.n_class)
+    precision = compute_precision(y_pred_labels, y_true, conf.n_class)
+    recall = compute_recall(y_pred_labels, y_true, conf.n_class)
+    balanced_acc = compute_balanced_accuracy(y_pred_labels, y_true)
 
     print('* Acc@1 {top1.global_avg:.3f} loss {losses.global_avg:.3f} auroc {AUROC:.3f} f1_score {F1:.3f}'
           .format(top1=metric_logger.acc1, losses=metric_logger.loss, AUROC=auroc, F1=f1_score))

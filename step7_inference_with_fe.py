@@ -28,7 +28,6 @@ from types import SimpleNamespace
 
 import torch
 import yaml
-from sklearn.metrics import balanced_accuracy_score
 
 from architecture.transformer import HAFED
 from envs.WSI_cosine_env_inference import WSICosineObservationEnv_inference
@@ -39,9 +38,16 @@ from modules.fglobal_mlp import FGlobal
 from rl_algorithms.ppo import Agent, Actor, Critic
 from utils.gpu_utils import check_gpu_availability
 from utils.inference_utils import Helper
+from utils.metrics import (
+    compute_accuracy,
+    compute_auroc,
+    compute_balanced_accuracy,
+    compute_f1,
+    compute_precision,
+    compute_recall,
+)
 from utils.path_utils import ensure_path_exists, resolve_conf_paths
 from utils.utils import Struct
-import torchmetrics
 
 
 def get_arguments():
@@ -218,29 +224,13 @@ def evaluate(conf):
     y_true = torch.cat(y_true, dim=0)
     y_pred_labels = torch.argmax(y_pred, dim=-1)
 
-    Accuracy_metric = torchmetrics.Accuracy(task='binary').to(conf.device)
-    Accuracy_metric(y_pred_labels, y_true)
-    accuracy = Accuracy_metric.compute().item()
-
-    AUROC_metric = torchmetrics.AUROC(task='binary').to(conf.device)
-    AUROC_metric(y_pred[:, 1], y_true)
-    auroc = AUROC_metric.compute().item()
-
-    F1_metric = torchmetrics.F1Score(task='binary').to(conf.device)
-    F1_metric(y_pred_labels, y_true)
-    f1_score = F1_metric.compute().item()
-
-    Precision_metric = torchmetrics.Precision(task='binary').to(conf.device)
-    Precision_metric(y_pred_labels, y_true)
-    precision = Precision_metric.compute().item()
-
-    Recall_metric = torchmetrics.Recall(task='binary').to(conf.device)
-    Recall_metric(y_pred_labels, y_true)
-    recall = Recall_metric.compute().item()
-
-    y_pred_np = y_pred_labels.cpu().numpy()
-    y_true_np = y_true.cpu().numpy()
-    balanced_acc = balanced_accuracy_score(y_true_np, y_pred_np)
+    n_class = getattr(conf, 'n_class', None) or int(y_pred.shape[-1])
+    accuracy = compute_accuracy(y_pred_labels, y_true, n_class)
+    auroc = compute_auroc(y_pred, y_true, n_class)
+    f1_score = compute_f1(y_pred_labels, y_true, n_class)
+    precision = compute_precision(y_pred_labels, y_true, n_class)
+    recall = compute_recall(y_pred_labels, y_true, n_class)
+    balanced_acc = compute_balanced_accuracy(y_pred_labels, y_true)
 
     print(f"{'Phase':<6} | {'Acc':<6} | {'AUROC':<6} | {'F1':<6} | {'Precision':<9} | {'Recall':<6} | {'Balanced Acc':<13} ")
     print("-" * 110)

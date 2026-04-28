@@ -176,6 +176,11 @@ FOR TCGA-NSCLC dataset
 python step1_create_patches.py --source SOURCE_DIR --save_dir SAVE_DIR --extension svs --patch_level 2
 ```
 
+FOR custom 3-class glioma subtype dataset (`glioma3`)
+```train
+python step1_create_patches.py --source SOURCE_DIR --save_dir SAVE_DIR --extension svs --patch_level 2
+```
+
 STEP 2
 This step handles feature extraction.
 There are two modes of operation:
@@ -281,6 +286,117 @@ Useful tuning flags:
 - `--contour_thickness 3` : line thickness for contour boundaries.
 
 Note : For TCGA-NSCL dataset similar config files are present in config/ folder.
+
+## Multiclass classification (3-class glioma subtype)
+
+The pipeline now ships with a 3-class glioma subtype dataset key called
+`glioma3` (`subtype_1`/`subtype_2`/`subtype_3` mapped to `0/1/2`). All training
+and inference scripts are class-count agnostic — they pick up `n_class` from
+the YAML config and use macro-averaged multiclass metrics whenever `n_class > 2`.
+
+### 1. Build the dataset CSV + stratified splits
+
+If you have a raw labels file with two columns (`slide_id,label`) where `label`
+is one of `subtype_1`, `subtype_2`, `subtype_3`, generate the SASHA-style CSV
+and 5-fold splits with:
+
+```bash
+python scripts/build_glioma3_dataset.py \
+    --raw_csv /path/to/slide_labels.csv \
+    --output_dir dataset_csv/glioma3 \
+    --seeds 1 2 3 4 5
+```
+
+This writes:
+- `dataset_csv/glioma3/glioma3.csv` (`case_id,slide_id,label`, `slide_id` ends in `.svs`).
+- `dataset_csv/glioma3/splits/split_<seed>.json` and `split_<seed>_summary.txt`.
+
+### 2. Patch and feature extraction (.svs)
+
+```bash
+python step1_create_patches.py --source SOURCE_DIR --save_dir SAVE_DIR --extension svs --patch_level 2
+
+python step2_extract_features.py \
+    --dataset_name glioma3 \
+    --data_h5_dir SAVE_DIR \
+    --data_slide_dir WSI_IMAGES_DIR \
+    --slide_ext .svs \
+    --csv_path dataset_csv/glioma3/glioma3.csv \
+    --feat_dir FEAT_DIR_TO_SAVE \
+    --batch_size 32 \
+    --extract_high_res_features True \
+    --patch_level_low_res 2 \
+    --patch_level_high_res 1
+```
+
+### 3. HAFED training and intermediate features (3-class)
+
+Edit `config/glioma3_config.yml` and set `data_dir` to `<FEAT_DIR_TO_SAVE>/hr/h5_files`.
+
+```bash
+python step3_WSI_classification_HAFED.py \
+    --config config/glioma3_config.yml \
+    --seed 1 \
+    --arch hafed \
+    --exp_name DEBUG \
+    --log_dir outputs/glioma3_hafed
+
+python step4_extract_intermediate_features.py \
+    --config config/glioma3_config.yml \
+    --seed 1 \
+    --arch hafed \
+    --ckpt_path outputs/glioma3_hafed/models/DEBUG/checkpoint-best.pt \
+    --output_path features/glioma3_hr_intermediate
+```
+
+### 4. TSU + RL training
+
+Edit `config/glioma3_tsu_config.yml` and `config/glioma3_rl_config.yml` so:
+- `level1_path` points to the directory written by step4
+  (`features/glioma3_hr_intermediate`).
+- `level3_path` points to `<FEAT_DIR_TO_SAVE>/lr/h5_files`.
+- `classifier_ckpt_path` and `mlp_fglobal_ckpt` point to the matching
+  checkpoint files when running step6/step7.
+
+```bash
+python step5_tsu_training.py \
+    --config config/glioma3_tsu_config.yml \
+    --seed 1 \
+    --arch hafed \
+    --log_dir outputs/glioma3_tsu
+
+python step6_rl_training.py \
+    --config config/glioma3_rl_config.yml \
+    --seed 1 \
+    --log_dir outputs/glioma3_rl
+```
+
+### 5. SASHA inference
+
+```bash
+python step7_inference.py --config config/glioma3_sasha_inference.yml --seed 1
+```
+
+For end-to-end inference (feature extraction + sampling) on new `.svs`:
+
+```bash
+python step7_inference_with_fe.py \
+    --config config/glioma3_sasha_inference_with_fe.yml \
+    --seed 1 \
+    --save_dir outputs/glioma3_sasha_runs
+```
+
+### Multiclass metric notes
+
+`utils/metrics.py` centralises the AUROC / F1 / Precision / Recall / Accuracy
+helpers used by step3, step6, step7 and `engine.py`:
+
+- For binary problems (`n_class == 2`) it preserves the original
+  `task='binary'` formulation, so existing CAMELYON/TCGA numbers are
+  unchanged.
+- For multiclass problems (`n_class >= 3`) it uses
+  `task='multiclass', average='macro'` and feeds AUROC the full
+  probability matrix instead of `y_pred[:, 1]`.
 
 
 ## Results

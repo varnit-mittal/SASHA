@@ -28,9 +28,7 @@ from pprint import pprint
 from types import SimpleNamespace
 
 import torch
-import torchmetrics
 import yaml
-from sklearn.metrics import balanced_accuracy_score
 from torch.utils.data import DataLoader
 
 from architecture.transformer import HAFED
@@ -41,6 +39,14 @@ from modules.fglobal_mlp import FGlobal
 from rl_algorithms.ppo import Agent, Actor, Critic
 from step4_extract_intermediate_features import load_model
 from utils.gpu_utils import check_gpu_availability
+from utils.metrics import (
+    compute_accuracy,
+    compute_auroc,
+    compute_balanced_accuracy,
+    compute_f1,
+    compute_precision,
+    compute_recall,
+)
 from utils.path_utils import ensure_path_exists, resolve_conf_paths
 from utils.utils import MetricLogger
 from utils.utils import Struct, set_seed
@@ -153,9 +159,9 @@ def main():
     # Now Evaluation Starts
     # Step 1 ----> We are evaluating the HAFED model [ ALl patches in H.R.]
     print("HAFED Inference")
-    train_acc, train_auroc, train_f1_score, train_precision, train_recall, train_balance_acc, train_tumor_correctly_classified, train_tumor_mis_classified = evaluate_hafed(classifier, train_loader, 'Train', conf.device)
-    val_acc, val_auroc, val_f1_score, val_precision, val_recall, val_balance_acc, val_tumor_correctly_classified, val_tumor_mis_classified = evaluate_hafed(classifier, val_loader, 'Val', conf.device)
-    test_acc, test_auroc, test_f1_score, test_precision, test_recall, test_balance_acc, test_tumor_correctly_classified, test_tumor_mis_classified = evaluate_hafed(classifier, test_loader,'Test', conf.device)
+    train_acc, train_auroc, train_f1_score, train_precision, train_recall, train_balance_acc, train_tumor_correctly_classified, train_tumor_mis_classified = evaluate_hafed(classifier, train_loader, 'Train', conf.device, conf.n_class)
+    val_acc, val_auroc, val_f1_score, val_precision, val_recall, val_balance_acc, val_tumor_correctly_classified, val_tumor_mis_classified = evaluate_hafed(classifier, val_loader, 'Val', conf.device, conf.n_class)
+    test_acc, test_auroc, test_f1_score, test_precision, test_recall, test_balance_acc, test_tumor_correctly_classified, test_tumor_mis_classified = evaluate_hafed(classifier, test_loader,'Test', conf.device, conf.n_class)
 
     print(f"{'Phase':<6} | {'Acc':<6} | {'AUROC':<6} | {'F1':<6} | {'Precision':<9} | {'Recall':<6} | {'Balanced Acc':<13} | {'Tumor Correct':<15} | {'Tumor Misclass':<15}")
     print("-" * 110)
@@ -226,39 +232,26 @@ def evaluate_policy(model, fglobal, classifier, data_loader, header, device, epo
     y_true = torch.cat(y_true, dim=0)
     y_pred_labels = torch.argmax(y_pred, dim=-1)
 
-    Accuracy_metric = torchmetrics.Accuracy(task='binary').to(device)
-    Accuracy_metric(y_pred_labels, y_true)
-    accuracy = Accuracy_metric.compute().item()
-
-    AUROC_metric = torchmetrics.AUROC(task='binary').to(device)
-    AUROC_metric(y_pred[:, 1], y_true)
-    auroc = AUROC_metric.compute().item()
-
-    F1_metric = torchmetrics.F1Score(task='binary').to(device)
-    F1_metric(y_pred_labels, y_true)
-    f1_score = F1_metric.compute().item()
-
-    Precision_metric = torchmetrics.Precision(task='binary').to(device)
-    Precision_metric(y_pred_labels, y_true)
-    precision = Precision_metric.compute().item()
-
-    Recall_metric = torchmetrics.Recall(task='binary').to(device)
-    Recall_metric(y_pred_labels, y_true)
-    recall = Recall_metric.compute().item()
+    accuracy = compute_accuracy(y_pred_labels, y_true, conf.n_class)
+    auroc = compute_auroc(y_pred, y_true, conf.n_class)
+    f1_score = compute_f1(y_pred_labels, y_true, conf.n_class)
+    precision = compute_precision(y_pred_labels, y_true, conf.n_class)
+    recall = compute_recall(y_pred_labels, y_true, conf.n_class)
+    balanced_acc = compute_balanced_accuracy(y_pred_labels, y_true)
 
     y_pred_np = y_pred_labels.cpu().numpy()
     y_true_np = y_true.cpu().numpy()
-    balanced_acc = balanced_accuracy_score(y_true_np, y_pred_np)
 
-    # Get slide names where true label is 1
-    true_label_1_indices = [i for i, val in enumerate(y_true_np) if val == 1]
+    # Slides whose true label belongs to a positive (non-zero) class.
+    # For binary problems this matches the original "tumor" slides; for
+    # multiclass it covers every non-class-0 slide.
+    true_label_pos_indices = [i for i, val in enumerate(y_true_np) if val != 0]
 
-    # Lists to hold categorized slide names
     correctly_classified = []
     misclassified = []
 
-    for idx in true_label_1_indices:
-        if y_pred_np[idx] == 1:
+    for idx in true_label_pos_indices:
+        if y_pred_np[idx] == y_true_np[idx]:
             correctly_classified.append(slide_names[idx])
         else:
             misclassified.append(slide_names[idx])
@@ -266,7 +259,7 @@ def evaluate_policy(model, fglobal, classifier, data_loader, header, device, epo
     return accuracy, auroc, f1_score, precision, recall, balanced_acc, correctly_classified, misclassified
 
 @torch.no_grad()
-def evaluate_hafed(model, data_loader, header, device):
+def evaluate_hafed(model, data_loader, header, device, n_class):
 
     # Set the network to evaluation mode
     model.eval()
@@ -293,40 +286,23 @@ def evaluate_hafed(model, data_loader, header, device):
     y_true = torch.cat(y_true, dim=0)
     y_pred_labels = torch.argmax(y_pred, dim=-1)
 
-
-    Accuracy_metric = torchmetrics.Accuracy(task='binary').to(device)
-    Accuracy_metric(y_pred_labels, y_true)
-    accuracy = Accuracy_metric.compute().item()
-
-    AUROC_metric = torchmetrics.AUROC(task='binary').to(device)
-    AUROC_metric(y_pred[:, 1], y_true)
-    auroc = AUROC_metric.compute().item()
-
-    F1_metric = torchmetrics.F1Score(task='binary').to(device)
-    F1_metric(y_pred_labels, y_true)
-    f1_score = F1_metric.compute().item()
-
-    Precision_metric = torchmetrics.Precision(task='binary').to(device)
-    Precision_metric(y_pred_labels, y_true)
-    precision = Precision_metric.compute().item()
-
-    Recall_metric = torchmetrics.Recall(task='binary').to(device)
-    Recall_metric(y_pred_labels, y_true)
-    recall = Recall_metric.compute().item()
+    accuracy = compute_accuracy(y_pred_labels, y_true, n_class)
+    auroc = compute_auroc(y_pred, y_true, n_class)
+    f1_score = compute_f1(y_pred_labels, y_true, n_class)
+    precision = compute_precision(y_pred_labels, y_true, n_class)
+    recall = compute_recall(y_pred_labels, y_true, n_class)
+    balanced_acc = compute_balanced_accuracy(y_pred_labels, y_true)
 
     y_pred_np = y_pred_labels.cpu().numpy()
     y_true_np = y_true.cpu().numpy()
-    balanced_acc = balanced_accuracy_score(y_true_np, y_pred_np)
 
-    # Get slide names where true label is 1
-    true_label_1_indices = [i for i, val in enumerate(y_true_np) if val == 1]
+    true_label_pos_indices = [i for i, val in enumerate(y_true_np) if val != 0]
 
-    # Lists to hold categorized slide names
     correctly_classified = []
     misclassified = []
 
-    for idx in true_label_1_indices:
-        if y_pred_np[idx] == 1:
+    for idx in true_label_pos_indices:
+        if y_pred_np[idx] == y_true_np[idx]:
             correctly_classified.append(slide_names[idx])
         else:
             misclassified.append(slide_names[idx])

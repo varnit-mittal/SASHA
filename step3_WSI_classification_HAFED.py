@@ -32,7 +32,6 @@ from pprint import pprint
 
 import torch
 import torch.nn.functional as F
-import torchmetrics
 import yaml
 from timm.utils import accuracy
 from torch import nn
@@ -43,6 +42,7 @@ from architecture.transformer import ACMIL_GA
 from architecture.transformer import HAFED
 from datasets.datasets import build_HDF5_feat_dataset
 from utils.gpu_utils import check_gpu_availability
+from utils.metrics import compute_auroc, compute_f1
 from utils.path_utils import ensure_path_exists, resolve_conf_paths
 from utils.utils import MetricLogger, SmoothedValue, adjust_learning_rate
 from utils.utils import save_model, Struct, set_seed
@@ -357,12 +357,8 @@ def evaluate(net, criterion, data_loader, device, conf, header, epoch):
     y_pred = torch.cat(y_pred, dim=0)
     y_true = torch.cat(y_true, dim=0)
     y_pred_labels = torch.argmax(y_pred, dim=-1)
-    AUROC_metric = torchmetrics.AUROC(task='binary').to(device)
-    AUROC_metric(y_pred[:, 1], y_true)
-    auroc = AUROC_metric.compute().item()
-    F1_metric = torchmetrics.F1Score(task='binary').to(device)
-    F1_metric(y_pred_labels, y_true)
-    f1_score = F1_metric.compute().item()
+    auroc = compute_auroc(y_pred, y_true, conf.n_class)
+    f1_score = compute_f1(y_pred_labels, y_true, conf.n_class)
 
     print('* Acc@1 {top1.global_avg:.3f} loss {losses.global_avg:.3f} auroc {AUROC:.3f} f1_score {F1:.3f}'
           .format(top1=metric_logger.acc1, losses=metric_logger.loss, AUROC=auroc, F1=f1_score))
