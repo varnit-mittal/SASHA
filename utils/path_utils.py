@@ -64,10 +64,20 @@ def resolve_path(path_value, nas_root=None, base_dir=None):
         normalized_nas_root = os.path.expandvars(os.path.expanduser(normalized_nas_root))
 
     if not os.path.isabs(path):
-        if normalized_nas_root:
-            path = os.path.join(normalized_nas_root, path)
-        elif base_dir:
-            path = os.path.join(base_dir, path)
+        # Prefer `base_dir` when the relative path actually resolves to an
+        # existing file/dir there (e.g. repo-tracked inputs such as
+        # `dataset_csv/<dataset>/<dataset>.csv`). Otherwise fall back to
+        # `nas_root` so NAS-stored outputs like `features/lr/h5_files`
+        # continue to resolve correctly.
+        base_candidate = os.path.join(base_dir, path) if base_dir else None
+        nas_candidate = os.path.join(normalized_nas_root, path) if normalized_nas_root else None
+
+        if base_candidate and os.path.exists(base_candidate):
+            path = base_candidate
+        elif nas_candidate:
+            path = nas_candidate
+        elif base_candidate:
+            path = base_candidate
 
     return os.path.normpath(path)
 
