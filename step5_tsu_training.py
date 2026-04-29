@@ -31,6 +31,7 @@ from pprint import pprint
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 import yaml
 from torch import nn
 from torch.utils.data import DataLoader
@@ -154,32 +155,55 @@ def train_one_epoch(model, criterion, data_loader, optimizer, device, epoch, con
     print_freq = 100
 
     epoch_loss = 0
+    n_anchors_per_slide = max(1, int(getattr(conf, 'n_anchors_per_slide', 1)))
+    normalize_targets = bool(getattr(conf, 'normalize_targets', False))
 
     for data_it, data in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         hr_features = data['hr'][0].to(device, dtype=torch.float32)
         lr_features = data['lr'][0].to(device, dtype=torch.float32)
-        
+
         # Calculate and set new learning rate
         adjust_learning_rate(optimizer, epoch + data_it / len(data_loader), conf)
+
+        # Sample multiple anchors per slide so a single step uses more
+        # (anchor, similar-patches) pairs instead of just one. Skip anchors
+        # that have no high-similarity neighbours.
         N = lr_features.shape[0]
-        choices = list(range(N))
-        a_t = np.random.choice(choices)
-        v_at = hr_features[a_t].to(device)
-        z_at = lr_features[a_t].to(device)
+        n_take = min(n_anchors_per_slide, N)
+        anchors = np.random.choice(N, size=n_take, replace=False)
 
-        # Similar patches 
-        cosine_vector = torch.cosine_similarity(lr_features, lr_features[a_t])
-        high_cosine_indices = (torch.abs(cosine_vector) >= conf.cosine_threshold).nonzero()[:, 0]
-        input_f_global = torch.cat((v_at.repeat(len(high_cosine_indices), 1),
-                                    z_at.repeat(len(high_cosine_indices), 1),
-                                    lr_features[high_cosine_indices]), dim=1)
-        output = model(input_f_global)
+        per_anchor_losses = []
+        for a_t in anchors:
+            v_at = hr_features[a_t]
+            z_at = lr_features[a_t]
 
-        loss = criterion(output, hr_features[high_cosine_indices])
+            cosine_vector = torch.cosine_similarity(lr_features, lr_features[a_t].unsqueeze(0))
+            high_cosine_indices = (torch.abs(cosine_vector) >= conf.cosine_threshold).nonzero()[:, 0]
+            if high_cosine_indices.numel() == 0:
+                continue
+
+            input_f_global = torch.cat((
+                v_at.repeat(len(high_cosine_indices), 1),
+                z_at.repeat(len(high_cosine_indices), 1),
+                lr_features[high_cosine_indices],
+            ), dim=1)
+            output = model(input_f_global)
+            target = hr_features[high_cosine_indices]
+
+            if normalize_targets:
+                output = F.normalize(output, dim=-1)
+                target = F.normalize(target, dim=-1)
+
+            per_anchor_losses.append(criterion(output, target))
+
+        if not per_anchor_losses:
+            continue
+        loss = torch.stack(per_anchor_losses).mean()
+
         optimizer.zero_grad()
-        loss.backward(retain_graph=True)
+        loss.backward()
         optimizer.step()
-        
+
         epoch_loss += loss.item()
         metric_logger.update(lr=optimizer.param_groups[0]['lr'])
         metric_logger.update(mse_loss=loss.item())
@@ -193,40 +217,60 @@ def train_one_epoch(model, criterion, data_loader, optimizer, device, epoch, con
 
 @torch.no_grad()
 def evaluate(model, criterion, data_loader, device, conf, header, epoch):
-    
+
     model.eval()
     metric_logger = MetricLogger(delimiter="  ")
+    n_anchors_per_slide = max(1, int(getattr(conf, 'n_anchors_per_slide', 1)))
+    normalize_targets = bool(getattr(conf, 'normalize_targets', False))
+
     mse_loss = 0
+    n_slides_counted = 0
     for data in metric_logger.log_every(data_loader, 100, header):
         hr_features = data['hr'][0].to(device, dtype=torch.float32)
         lr_features = data['lr'][0].to(device, dtype=torch.float32)
-        
-        
-        # Load basic details
+
         N = lr_features.shape[0]
-        choices = list(range(N))
-        a_t = np.random.choice(choices)
-        v_at = hr_features[a_t].to(device)
-        z_at = lr_features[a_t].to(device)
+        n_take = min(n_anchors_per_slide, N)
+        anchors = np.random.choice(N, size=n_take, replace=False)
 
-        # Similar patches details
-        cosine_vector = torch.cosine_similarity(lr_features, lr_features[a_t])
-        high_cosine_indices = (torch.abs(cosine_vector) >= conf.cosine_threshold).nonzero()[:, 0]
+        per_anchor_losses = []
+        for a_t in anchors:
+            v_at = hr_features[a_t]
+            z_at = lr_features[a_t]
 
-        input_f_global = torch.cat((v_at.repeat(len(high_cosine_indices), 1), z_at.repeat(len(high_cosine_indices), 1), lr_features[high_cosine_indices]), dim=1)
-        output = model(input_f_global)
-        loss = criterion(output, hr_features[high_cosine_indices])
+            cosine_vector = torch.cosine_similarity(lr_features, lr_features[a_t].unsqueeze(0))
+            high_cosine_indices = (torch.abs(cosine_vector) >= conf.cosine_threshold).nonzero()[:, 0]
+            if high_cosine_indices.numel() == 0:
+                continue
 
-        mse_loss += loss.item()
-        metric_logger.update(loss=loss.item())
-        
-    mse_loss /= len(data_loader)
-    
+            input_f_global = torch.cat((
+                v_at.repeat(len(high_cosine_indices), 1),
+                z_at.repeat(len(high_cosine_indices), 1),
+                lr_features[high_cosine_indices],
+            ), dim=1)
+            output = model(input_f_global)
+            target = hr_features[high_cosine_indices]
+
+            if normalize_targets:
+                output = F.normalize(output, dim=-1)
+                target = F.normalize(target, dim=-1)
+
+            per_anchor_losses.append(criterion(output, target))
+
+        if not per_anchor_losses:
+            continue
+        slide_loss = torch.stack(per_anchor_losses).mean()
+        mse_loss += slide_loss.item()
+        n_slides_counted += 1
+        metric_logger.update(loss=slide_loss.item())
+
+    mse_loss /= max(n_slides_counted, 1)
+
     if conf.logs != 'disabled':
         conf.writer.add_scalar(f"{header}/loss", metric_logger.loss.global_avg, epoch)
-        
-    print(f"{header}: loss={mse_loss}")
-    
+
+    print(f"{header}: loss={mse_loss}  (slides counted: {n_slides_counted})")
+
     return mse_loss
 
 

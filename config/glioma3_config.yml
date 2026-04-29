@@ -2,22 +2,27 @@
 # Used by step3_WSI_classification_HAFED.py and step4_extract_intermediate_features.py.
 
 # Training hyperparameters
-train_epoch: 50           # number of epochs
+train_epoch: 80           # number of epochs (was 50; best epoch was 17/50 with degenerate model, give the new config room)
 B: 1                      # batch size
-warmup_epoch: 0           # number of warm-up epochs
+warmup_epoch: 3           # number of warm-up epochs (was 0; small data + B=1 benefits from warmup)
 wd: 0.0001                # weight decay
 lr: 0.0004
 min_lr: 0
+label_smoothing: 0.1      # CE label smoothing; helps with small val set noise
+use_class_weights: True   # weight CE by inverse train-set class frequency
+grad_clip: 1.0            # clip grad norm; B=1 makes gradients noisy
 
 
 # ACMIL hyperparameters (kept so config is interchangeable with --arch acmil)
-n_token: 1
+n_token: 5
 n_masked_patch: 20
 
 
 # HAFED model hyperparameters
-n_token_1: 1            # number of attention models in attention block 1
-n_token_2: 1            # number of attention models in attention block 2
+# n_token_1=n_token_2=1 disables HAFED's multi-head diff_loss (inner loops are no-ops)
+# and degenerates the architecture into single-attention MIL. Use 5 like the paper.
+n_token_1: 5            # number of attention models in attention block 1
+n_token_2: 5            # number of attention models in attention block 2
 n_masked_patch_1: 10    # top-K instances randomly masked in STKIM
 n_masked_patch_2: 20
 mask_drop: 0.4

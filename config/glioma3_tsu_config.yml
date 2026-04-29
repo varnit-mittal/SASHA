@@ -1,16 +1,18 @@
 #### ---------------------- TSU config parameters (3-class subtype) ------------
 # Used by step5_tsu_training.py.
 
-train_epoch: 100           # number of epochs
+train_epoch: 200           # was 100; best epoch was 67/100 still improving
 B: 1                       # batch size
-warmup_epoch: 0            # number of warm-up epochs
+warmup_epoch: 5            # was 0; small LR warmup stabilises early training
 reg: 0.0004                # weight decay
-lr: 0.00004
+lr: 0.0003                 # was 4e-5 (~7.5x lower than TCGA TSU); raised to match
 min_lr: 0
 
 # Dataset details
 frac: 0.2
-cosine_threshold: 0.95
+cosine_threshold: 0.90      # was 0.95; lower threshold => more similar patches per anchor => more training pairs (glioma slides are heterogeneous)
+n_anchors_per_slide: 4      # number of anchors sampled per slide per step (was implicitly 1; >1 multiplies effective batch)
+normalize_targets: True     # L2-normalise both predicted and target HR features before MSE; makes loss scale-independent
 dataset: glioma3
 nas_root: /mnt/nas               # prefixes relative paths below
 n_class: 3

@@ -140,6 +140,19 @@ def main():
     val_loader = DataLoader(val_data, batch_size=conf.B, shuffle=False, num_workers=conf.n_worker, pin_memory=conf.pin_memory, drop_last=False)
     test_loader = DataLoader(test_data, batch_size=conf.B, shuffle=False, num_workers=conf.n_worker, pin_memory=conf.pin_memory, drop_last=False)
 
+    # Optional class-balancing for CE: inverse train-set class frequency, normalised so weights
+    # average to 1. Mitigates the mild glioma3 class skew (e.g. 51/68/68 in split_1).
+    class_weights = None
+    if getattr(conf, 'use_class_weights', False):
+        train_labels = [int(item['label']) for item in train_data.data_dict.values()]
+        counts = torch.zeros(conf.n_class, dtype=torch.float)
+        for l in train_labels:
+            counts[l] += 1
+        counts = torch.clamp(counts, min=1.0)
+        weights = counts.sum() / (conf.n_class * counts)
+        class_weights = weights.to(conf.device)
+        print(f"[step3] using CE class weights: {class_weights.tolist()}")
+
     # Define Network
 
     if conf.arch == 'acmil':
@@ -159,11 +172,12 @@ def main():
         raise Exception(f"Enter a valid model architecture name e.g. acmil, hafed")
 
     model.to(conf.device)
-    
-    # Define criterion
-    criterion = nn.CrossEntropyLoss()
 
-    # Define optimizer, lr not important at this point
+    # Define criterion (label smoothing + optional class weights help with small/noisy val sets)
+    label_smoothing = float(getattr(conf, 'label_smoothing', 0.0))
+    criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=label_smoothing)
+
+    # Define optimizer, lr not important at this point (overridden by adjust_learning_rate)
     optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=0.001, weight_decay=conf.wd)
 
 
@@ -291,8 +305,11 @@ def train_one_epoch(model, criterion, data_loader, optimizer, device, epoch, con
 
         optimizer.zero_grad()
 
-        # Back-propagate error and update parameters
+        # Back-propagate error and update parameters (with optional gradient clipping)
         loss.backward()
+        grad_clip = float(getattr(conf, 'grad_clip', 0.0) or 0.0)
+        if grad_clip > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
         optimizer.step()
 
         if conf.logs != 'disabled':
