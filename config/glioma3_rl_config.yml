@@ -1,12 +1,12 @@
 ## RL hyperparameters (3-class subtype)
 # Used by step6_rl_training.py.
 
-train_epoch: 25
-num_envs: 2
+train_epoch: 60          # was 25; best epoch was 16/25 -> PPO had not converged
+num_envs: 4              # was 2; more rollouts per slide -> lower variance advantages
 B: 1
-warmup_epoch: 0
+warmup_epoch: 3          # was 0; small warmup stabilises actor/critic at the higher LR
 wd: 0.0001
-lr: 0.00001
+lr: 0.00003              # was 1e-5; bumped 3x for noticeably faster PPO learning
 min_lr: 0
 
 
@@ -14,7 +14,7 @@ min_lr: 0
 explore_frac: 0.05
 gamma: 1.0
 clip: 0.1
-entropy_coef: 0.001
+entropy_coef: 0.005      # was 0.001; encourage more exploration on tiny dataset
 use_entropy_loss: True
 max_grad_norm: 0.5
 num_epochs_on_single_roll_out: 4
@@ -36,9 +36,9 @@ D_inner: 128
 
 
 # Model weights -
-frac_visit: 0.2
-cosine_threshold: 0.95
-classifier_ckpt_path: sasha_outputs/glioma3/logs/glioma3_hafed/models/DEBUG/checkpoint-best.pt   # output of step3
+frac_visit: 0.35         # was 0.2; with TSU imperfect, lower visit ratios leave the classifier far OOD vs. step3 training distribution
+cosine_threshold: 0.90   # MUST match `cosine_threshold` in glioma3_tsu_config.yml (TSU was trained at 0.90)
+classifier_ckpt_path: sasha_outputs/glioma3/logs/glioma3_hafed/models/DEBUG/checkpoint-best.pt   # output of step3 (match your --exp_name)
 mlp_fglobal_ckpt:     sasha_outputs/glioma3/logs/glioma3_tsu/models/DEBUG/checkpoint-best.pt    # output of step5 (cosine_threshold must match)
 level1_path: sasha_outputs/glioma3/features/intermediate_hafed                                  # output of step4
 level3_path: sasha_outputs/glioma3/features/lr/h5_files                                         # output of step2
