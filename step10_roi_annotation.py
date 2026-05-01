@@ -23,7 +23,6 @@ python step10_roi_annotation.py \
 import argparse
 import json
 import os
-from collections import deque
 from types import SimpleNamespace
 
 import cv2
@@ -61,11 +60,7 @@ def get_arguments():
     parser.add_argument('--level', type=int, default=6, help='OpenSlide level for ROI overlay image')
     parser.add_argument('--patch_size_level0', type=int, default=2048, help='low-resolution patch size expressed in level-0 pixels')
     parser.add_argument('--roi_percentile', type=float, default=85.0, help='percentile cutoff on suspicion score for ROI candidates')
-    parser.add_argument('--roi_candidate_top_k', type=int, default=0, help='if >0, use top-K scored patches as ROI candidates (overrides percentile cutoff)')
     parser.add_argument('--min_roi_patches', type=int, default=8, help='minimum connected candidate patches to keep an ROI')
-    parser.add_argument('--max_roi_patches', type=int, default=0, help='if >0, split large ROIs to at most this many patches')
-    parser.add_argument('--max_rois', type=int, default=0, help='if >0, keep only the top-K ROIs by score_mean')
-    parser.add_argument('--allow_single_patch_fallback', action='store_true', help='allow a single-patch ROI when no ROI meets min_roi_patches')
 
     parser.add_argument('--selected_weight', type=float, default=1.0, help='weight for RL-selected patches')
     parser.add_argument('--similar_weight', type=float, default=0.35, help='weight for similarity-updated patches')
@@ -540,75 +535,17 @@ def build_suspicion_scores(n_patches, selected_indices, similar_groups, attentio
     return scores
 
 
-def split_component_indices(comp_indices, gx, gy, scores, max_roi_patches):
-    if max_roi_patches <= 0 or comp_indices.size <= max_roi_patches:
-        return [comp_indices]
-
-    cell_to_indices = {}
-    for idx in comp_indices.tolist():
-        key = (int(gx[idx]), int(gy[idx]))
-        cell_to_indices.setdefault(key, []).append(int(idx))
-
-    unassigned = set(comp_indices.tolist())
-    sorted_indices = sorted(comp_indices.tolist(), key=lambda i: scores[i], reverse=True)
-
-    groups = []
-    for seed in sorted_indices:
-        if seed not in unassigned:
-            continue
-        group = []
-        queue = deque([seed])
-        while queue and len(group) < max_roi_patches:
-            idx = queue.popleft()
-            if idx not in unassigned:
-                continue
-            unassigned.remove(idx)
-            group.append(idx)
-            x = int(gx[idx])
-            y = int(gy[idx])
-            for dx in (-1, 0, 1):
-                for dy in (-1, 0, 1):
-                    if dx == 0 and dy == 0:
-                        continue
-                    neighbor = (x + dx, y + dy)
-                    for n_idx in cell_to_indices.get(neighbor, []):
-                        if n_idx in unassigned:
-                            queue.append(n_idx)
-        groups.append(np.array(group, dtype=np.int64))
-
-    return groups
-
-
-def generate_connected_rois(
-    coords,
-    scores,
-    patch_size_level0,
-    roi_percentile,
-    min_roi_patches,
-    roi_candidate_top_k=0,
-    max_roi_patches=0,
-    max_rois=0,
-    allow_single_patch_fallback=False,
-):
-    positive_indices = np.where(scores > 0)[0]
-    if positive_indices.size == 0:
+def generate_connected_rois(coords, scores, patch_size_level0, roi_percentile, min_roi_patches):
+    positive = scores[scores > 0]
+    if positive.size == 0:
         return []
 
-    if roi_candidate_top_k and roi_candidate_top_k > 0:
-        top_k = min(int(roi_candidate_top_k), int(positive_indices.size))
-        ranked = positive_indices[np.argsort(scores[positive_indices])][-top_k:]
-        candidate_indices = ranked
-    else:
-        threshold = float(np.percentile(scores[positive_indices], roi_percentile))
-        candidate_indices = positive_indices[scores[positive_indices] >= threshold]
+    threshold = float(np.percentile(positive, roi_percentile))
+    candidate_indices = np.where(scores >= threshold)[0]
 
     if candidate_indices.size == 0:
-        if allow_single_patch_fallback:
-            top_idx = int(np.argmax(scores))
-            candidate_indices = np.array([top_idx], dtype=np.int64)
-        else:
-            print(f"[WARN] No candidate patches found at percentile {roi_percentile}. Returning empty ROI list.")
-            return []
+        top_idx = int(np.argmax(scores))
+        candidate_indices = np.array([top_idx], dtype=np.int64)
 
     gx = np.round(coords[:, 0] / patch_size_level0).astype(np.int32)
     gy = np.round(coords[:, 1] / patch_size_level0).astype(np.int32)
@@ -644,56 +581,47 @@ def generate_connected_rois(
             continue
 
         comp_indices = np.array(comp_indices, dtype=np.int64)
-        for group_indices in split_component_indices(comp_indices, gx, gy, scores, max_roi_patches):
-            if len(group_indices) < min_roi_patches:
-                continue
+        x_vals = coords[comp_indices, 0]
+        y_vals = coords[comp_indices, 1]
 
-            x_vals = coords[group_indices, 0]
-            y_vals = coords[group_indices, 1]
+        x_min = int(x_vals.min())
+        y_min = int(y_vals.min())
+        x_max = int(x_vals.max() + patch_size_level0)
+        y_max = int(y_vals.max() + patch_size_level0)
 
-            x_min = int(x_vals.min())
-            y_min = int(y_vals.min())
-            x_max = int(x_vals.max() + patch_size_level0)
-            y_max = int(y_vals.max() + patch_size_level0)
-
-            roi = {
-                'roi_id': len(rois) + 1,
-                'x_min': x_min,
-                'y_min': y_min,
-                'x_max': x_max,
-                'y_max': y_max,
-                'n_patches': int(len(group_indices)),
-                'score_mean': float(scores[group_indices].mean()),
-                'score_max': float(scores[group_indices].max()),
-                'patch_indices': group_indices.tolist(),
-            }
-            rois.append(roi)
+        roi = {
+            'roi_id': len(rois) + 1,
+            'x_min': x_min,
+            'y_min': y_min,
+            'x_max': x_max,
+            'y_max': y_max,
+            'n_patches': int(len(comp_indices)),
+            'score_mean': float(scores[comp_indices].mean()),
+            'score_max': float(scores[comp_indices].max()),
+            'patch_indices': comp_indices.tolist(),
+        }
+        rois.append(roi)
 
     if len(rois) == 0:
-        if allow_single_patch_fallback:
-            top_idx = int(np.argmax(scores))
-            x = int(coords[top_idx, 0])
-            y = int(coords[top_idx, 1])
-            rois.append(
-                {
-                    'roi_id': 1,
-                    'x_min': x,
-                    'y_min': y,
-                    'x_max': x + patch_size_level0,
-                    'y_max': y + patch_size_level0,
-                    'n_patches': 1,
-                    'score_mean': float(scores[top_idx]),
-                    'score_max': float(scores[top_idx]),
-                    'patch_indices': [top_idx],
-                }
-            )
-        else:
-            print(f"[WARN] No ROIs met min_roi_patches={min_roi_patches}. Returning empty ROI list.")
-            return []
+        # Fallback: provide at least one ROI around top scoring patch.
+        top_idx = int(np.argmax(scores))
+        x = int(coords[top_idx, 0])
+        y = int(coords[top_idx, 1])
+        rois.append(
+            {
+                'roi_id': 1,
+                'x_min': x,
+                'y_min': y,
+                'x_max': x + patch_size_level0,
+                'y_max': y + patch_size_level0,
+                'n_patches': 1,
+                'score_mean': float(scores[top_idx]),
+                'score_max': float(scores[top_idx]),
+                'patch_indices': [top_idx],
+            }
+        )
 
     rois.sort(key=lambda item: item['score_mean'], reverse=True)
-    if max_rois and int(max_rois) > 0:
-        rois = rois[:int(max_rois)]
     for idx, roi in enumerate(rois, start=1):
         roi['roi_id'] = idx
 
@@ -702,17 +630,6 @@ def generate_connected_rois(
 
 def draw_rois_on_wsi(wsi_path, rois, coords, patch_size_level0, level, output_path, contour_alpha, contour_thickness):
     slide = openslide.OpenSlide(wsi_path)
-
-    level_count = slide.level_count
-    if level < 0:
-        level = level_count + level
-    if level < 0 or level >= level_count:
-        safe_level = max(0, level_count - 1)
-        print(
-            f"[WARN] Requested level {level} is out of range for this slide (levels: 0-{level_count - 1}). "
-            f"Using level {safe_level} instead."
-        )
-        level = safe_level
 
     downscale_factor = float(slide.level_downsamples[level])
     wsi_size = slide.level_dimensions[level]
@@ -731,13 +648,9 @@ def draw_rois_on_wsi(wsi_path, rois, coords, patch_size_level0, level, output_pa
         (0, 128, 255),
     ]
 
-    roi_labels = []
     for roi in rois:
-        color = palette[(int(roi['roi_id']) - 1) % len(palette)]
+        roi_mask = np.zeros((h, w), dtype=np.uint8)
         patch_indices = roi.get('patch_indices', [])
-        x_min, y_min, x_max, y_max = w, h, 0, 0
-        has_patch = False
-
         for idx in patch_indices:
             if idx < 0 or idx >= coords.shape[0]:
                 continue
@@ -749,22 +662,55 @@ def draw_rois_on_wsi(wsi_path, rois, coords, patch_size_level0, level, output_pa
                 continue
             x0 = max(0, x0)
             y0 = max(0, y0)
-            fill_layer[y0:y1, x0:x1] = color
-            has_patch = True
-            x_min = min(x_min, x0)
-            y_min = min(y_min, y0)
-            x_max = max(x_max, x1)
-            y_max = max(y_max, y1)
+            roi_mask[y0:y1, x0:x1] = 255
 
-        if has_patch:
-            roi_labels.append((roi['roi_id'], color, x_min, y_min, x_max, y_max))
+        if roi_mask.sum() == 0:
+            continue
+
+        kernel = np.ones((3, 3), dtype=np.uint8)
+        roi_mask = cv2.morphologyEx(roi_mask, cv2.MORPH_CLOSE, kernel)
+        contours, _ = cv2.findContours(roi_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if len(contours) == 0:
+            continue
+
+        color = palette[(int(roi['roi_id']) - 1) % len(palette)]
+        cv2.drawContours(fill_layer, contours, -1, color, thickness=cv2.FILLED)
 
     contour_alpha = float(np.clip(contour_alpha, 0.0, 1.0))
     out_img = cv2.addWeighted(base_img, 1.0, fill_layer, contour_alpha, 0.0)
 
-    for roi_id, color, x_min, y_min, _, _ in roi_labels:
-        label = f"ROI-{roi_id}"
-        cv2.putText(out_img, label, (int(x_min), max(20, int(y_min) - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2, cv2.LINE_AA)
+    for roi in rois:
+        roi_mask = np.zeros((h, w), dtype=np.uint8)
+        patch_indices = roi.get('patch_indices', [])
+        for idx in patch_indices:
+            if idx < 0 or idx >= coords.shape[0]:
+                continue
+            x0 = int(round(float(coords[idx, 0]) / downscale_factor))
+            y0 = int(round(float(coords[idx, 1]) / downscale_factor))
+            x1 = min(w, x0 + patch_size_level)
+            y1 = min(h, y0 + patch_size_level)
+            if x0 >= w or y0 >= h or x1 <= 0 or y1 <= 0:
+                continue
+            x0 = max(0, x0)
+            y0 = max(0, y0)
+            roi_mask[y0:y1, x0:x1] = 255
+
+        if roi_mask.sum() == 0:
+            continue
+
+        kernel = np.ones((3, 3), dtype=np.uint8)
+        roi_mask = cv2.morphologyEx(roi_mask, cv2.MORPH_CLOSE, kernel)
+        contours, _ = cv2.findContours(roi_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if len(contours) == 0:
+            continue
+
+        color = palette[(int(roi['roi_id']) - 1) % len(palette)]
+        cv2.drawContours(out_img, contours, -1, color, thickness=max(1, int(contour_thickness)))
+
+        largest = max(contours, key=cv2.contourArea)
+        x_lbl, y_lbl, _, _ = cv2.boundingRect(largest)
+        label = f"ROI-{roi['roi_id']}"
+        cv2.putText(out_img, label, (x_lbl, max(20, y_lbl - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2, cv2.LINE_AA)
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     cv2.imwrite(output_path, cv2.cvtColor(out_img, cv2.COLOR_RGB2BGR))
@@ -823,10 +769,6 @@ def main():
         patch_size_level0=args.patch_size_level0,
         roi_percentile=args.roi_percentile,
         min_roi_patches=args.min_roi_patches,
-        roi_candidate_top_k=args.roi_candidate_top_k,
-        max_roi_patches=args.max_roi_patches,
-        max_rois=args.max_rois,
-        allow_single_patch_fallback=args.allow_single_patch_fallback,
     )
 
     wsi_path = resolve_wsi_file_path(
