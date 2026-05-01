@@ -603,12 +603,6 @@ def generate_connected_rois(coords, scores, patch_size_level0, roi_percentile, m
         rois.append(roi)
 
     if len(rois) == 0:
-        if min_roi_patches > 1:
-            print(
-                f"[WARN] No ROIs met min_roi_patches={min_roi_patches}. "
-                "Returning empty ROI list instead of falling back to a single patch."
-            )
-            return []
         # Fallback: provide at least one ROI around top scoring patch.
         top_idx = int(np.argmax(scores))
         x = int(coords[top_idx, 0])
