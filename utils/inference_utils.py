@@ -62,9 +62,13 @@ class Helper():
         self.feature_aggregator = classifier
         
 
-    def create_patches(self, slide, patch_level, step_size, patch_size):
+    def create_patches(self, slide, patch_level, step_size, patch_size, slide_ext=None):
         time_csv = os.path.join(f'{self.step1_save_dir}', 'time_patch.csv')
         time_csv_col_name = 'patch_time'
+
+        # Resolve slide extension: explicit arg first, then conf.slide_ext / conf.extension,
+        # then default to .tif for backward compatibility with the original camelyon flow.
+        ext = slide_ext or getattr(self.conf, 'slide_ext', None) or getattr(self.conf, 'extension', None) or 'tif'
 
         time_df = create_time_df(csv_file_path=time_csv, column_name_ls=['slide_name', time_csv_col_name])
         seg_times, patch_times, time_df = seg_and_patch(**self.directories, **self.parameters,
@@ -80,7 +84,8 @@ class Helper():
                                                         auto_skip=True,
                                                         time_df=time_df,
                                                         time_df_column_name=time_csv_col_name,
-                                                        slide_name = slide
+                                                        slide_name = slide,
+                                                        slide_ext = ext,
                                                         )
         time_df.to_csv(time_csv, index=False)
 

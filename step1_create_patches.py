@@ -155,10 +155,16 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
                   process_list=None,
                   time_df = None,
                   time_df_column_name = None,
-                  slide_name = None):
+                  slide_name = None,
+                  slide_ext = None):
 
     if slide_name is not None :
-        slides = [os.path.join(source, f'{slide_name}.tif')]
+        # When invoked for a single slide (e.g. from step7_inference_with_fe), the
+        # caller passes the file extension so glioma3 (.svs) and camelyon (.tif)
+        # both work. Falls back to the global args.extension for backward compat.
+        ext = slide_ext if slide_ext else getattr(args, 'extension', 'tif')
+        ext = ext.lstrip('.')
+        slides = [os.path.join(source, f'{slide_name}.{ext}')]
     else :
         slides = glob(source + f'/*.{args.extension}')
         slides = [slide for slide in slides if os.path.isfile(slide)]

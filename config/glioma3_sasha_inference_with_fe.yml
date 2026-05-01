@@ -1,13 +1,16 @@
-## SASHA full-pipeline inference config (3-class subtype)
-# Used by step7_inference_with_fe.py (runs feature extraction + RL sampling on raw .svs).
+## SASHA full-pipeline inference config (3-class glioma subtype)
+# Used by step7_inference_with_fe.py - runs feature extraction + RL sampling on raw .svs.
+# All `frac_visit`, `cosine_threshold`, `slide_ext`, `patch_level_*` values must match
+# what was used during step1/step2 patch creation and step5/step6 training.
 
 B: 1
 
 # Dataset details
 dataset: glioma3
-nas_root: /mnt/nas         # prefixes relative paths below
+nas_root: /mnt/nas
 fglobal: 'mlp'
 n_class: 3
+class_names: ["subtype_1", "subtype_2", "subtype_3"]   # used in the per-class metrics table
 
 ## Pretrained backbone
 backbone: 'ViT-S/16'
@@ -23,12 +26,33 @@ data_h5_dir: sasha_outputs/glioma3/step1
 # or replace with the absolute path on this machine, e.g. /home/pathousr2/varnit/SASHA/dataset_csv/glioma3/glioma3.csv
 csv_path: ${SASHA_REPO}/dataset_csv/glioma3/glioma3.csv
 
+# Patching / feature extraction defaults for glioma3 (overridable from CLI).
+slide_ext: svs                # glioma slides are .svs (camelyon was .tif)
+extension: svs
+patch_level_low_res: 2        # MUST match what step1 used (glioma3 uses level 2)
+patch_level_high_res: 1
+step_size: 256
+patch_size: 256
+target_patch_size: 224
+batch_size_hr: 1
+batch_size_lr: 512
+extract_high_res_features: True
+
 # Model weights
-frac_visit: 0.2
-cosine_threshold: 0.95
-classifier_ckpt_path: sasha_outputs/glioma3/logs/glioma3_hafed/models/DEBUG/checkpoint-best.pt
-mlp_fglobal_ckpt:     sasha_outputs/glioma3/logs/glioma3_tsu/models/DEBUG/checkpoint-best.pt
-rl_ckpt_path:         sasha_outputs/glioma3/logs/glioma3_rl/cosine_0.95_frac_0.2_seed_4/models/DEBUG/checkpoint-best.pt
+# IMPORTANT: frac_visit and cosine_threshold MUST match the values used during step6 training,
+# because step7 uses the same env (and step6 builds its log dir from these values).
+frac_visit: 0.35
+cosine_threshold: 0.90
+classifier_ckpt_path: sasha_outputs/glioma3/logs/glioma3_hafed/models/TUNED/checkpoint-best.pt
+mlp_fglobal_ckpt:     sasha_outputs/glioma3/logs/glioma3_tsu/models/TUNED/checkpoint-best.pt
+rl_ckpt_path:         sasha_outputs/glioma3/logs/glioma3_rl/cosine_0.9_frac_0.35_seed_1/models/TUNED/checkpoint-best.pt
+
+# Visualization (also CLI-overridable via --no_save_visualizations / --vis_level <int>).
+save_visualizations: True
+vis_level:                    # null/empty => uses (patch_level_low_res + 3), clamped to deepest available
+
+# Default save_dir (overridable via --save_dir CLI flag).
+save_dir: sasha_outputs/glioma3/inference_with_fe
 
 # Extra hyperparameters
 n_worker: 8

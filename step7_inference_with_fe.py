@@ -80,24 +80,29 @@ def get_arguments():
 
     parser = argparse.ArgumentParser('Inference with Feature Extraction', add_help=False)
 
+    # Defaults are intentionally None for dataset-specific knobs so values from the YAML
+    # config win when the CLI flag isn't passed. Hardcoded defaults that were correct for
+    # camelyon (.tif, level 3) silently broke glioma3 (.svs, level 2) before this change.
+
     # Patching arguments
-    parser.add_argument('--step_size', type=int, default=256, help='step_size')
-    parser.add_argument('--patch_size', type=int, default=256, help='patch_size')
-    parser.add_argument('--extension', default='tif', help='extension to processes data type, e.g. *.svs, *.tif')
+    parser.add_argument('--step_size', type=int, default=None, help='step_size (default: 256)')
+    parser.add_argument('--patch_size', type=int, default=None, help='patch_size (default: 256)')
+    parser.add_argument('--extension', default=None, help='extension to processes data type, e.g. svs, tif')
 
     # Feature Extraction arguments
-    parser.add_argument('--batch_size_hr', type=int, default=1)
-    parser.add_argument('--batch_size_lr', type=int, default=512)
-    parser.add_argument('--target_patch_size', type=int, default=224)
-    parser.add_argument('--slide_ext', type=str, default="tif", help="we have two options tif, svs, or any other compatible can work")
-    parser.add_argument('--extract_high_res_features', type=bool, default=True, help="To create a mapping from high resolution to low resolution")
-    parser.add_argument('--patch_level_low_res', type=int, default=3)  # Low  represents the magnified level [ Just Make sure that patch level should match from create patches ]
-    parser.add_argument('--patch_level_high_res', type=int, default=1)  # High represents the scanning level
+    parser.add_argument('--batch_size_hr', type=int, default=None, help='default: 1')
+    parser.add_argument('--batch_size_lr', type=int, default=None, help='default: 512')
+    parser.add_argument('--target_patch_size', type=int, default=None, help='default: 224')
+    parser.add_argument('--slide_ext', type=str, default=None, help="tif / svs / etc.")
+    parser.add_argument('--extract_high_res_features', type=bool, default=None, help="bool flag (default: True)")
+    parser.add_argument('--patch_level_low_res', type=int, default=None, help='glioma3 uses 2; camelyon uses 3')
+    parser.add_argument('--patch_level_high_res', type=int, default=None, help='default: 1')
 
     # RL Models
     parser.add_argument('--classifier_arch', default='hafed', help='choice of architecture for HAFED')
     parser.add_argument('--config', default=None, type=str, help='config file path')
     parser.add_argument('--seed', type=int, default=4, help='set the random seed')
+    parser.add_argument('--exp_name', type=str, default='DEBUG', help='Experiment name (used in output dirs)')
     parser.add_argument('--save_dir', default=None, help= 'folder path to save intermediate steps')
 
     # Visualization arguments
@@ -312,7 +317,7 @@ def evaluate(conf):
         # STEP1 PRE-PROCESSING AND CREATING PATCHES
         print(f"Evaluating slide: {slide}")
         print(f"Started Step1: Creating Patches")
-        helper.create_patches(slide, conf.patch_level_low_res, conf.step_size, conf.patch_size)
+        helper.create_patches(slide, conf.patch_level_low_res, conf.step_size, conf.patch_size, slide_ext=conf.slide_ext)
         print(f"Completed Step1: Creating Patches")
 
 
@@ -454,8 +459,33 @@ if __name__ == '__main__':
 
     with open(args.config, 'r') as ymlfile:
         c = yaml.load(ymlfile, Loader=yaml.FullLoader)
-        c.update(vars(args))
+        # Only overwrite config keys when CLI provided an explicit (non-None) value.
+        c.update({k: v for k, v in vars(args).items() if v is not None})
         conf = Struct(**c)
+
+    # Final fallback defaults for patching/feature-extraction knobs (same as the
+    # original argparse defaults, kept here so config can override them).
+    _defaults = {
+        'step_size': 256,
+        'patch_size': 256,
+        'extension': 'tif',
+        'batch_size_hr': 1,
+        'batch_size_lr': 512,
+        'target_patch_size': 224,
+        'slide_ext': 'tif',
+        'extract_high_res_features': True,
+        'patch_level_low_res': 3,
+        'patch_level_high_res': 1,
+    }
+    for k, v in _defaults.items():
+        if getattr(conf, k, None) is None:
+            setattr(conf, k, v)
+
+    # Normalize slide_ext: accept ".svs", "svs", ".tif", "tif" - the helper expects
+    # the bare extension without leading dot.
+    conf.slide_ext = str(conf.slide_ext).lstrip('.')
+    if getattr(conf, 'extension', None):
+        conf.extension = str(conf.extension).lstrip('.')
 
     resolve_conf_paths(conf, ['data_h5_dir', 'source', 'csv_path', 'classifier_ckpt_path', 'mlp_fglobal_ckpt', 'rl_ckpt_path', 'save_dir'], base_dir=os.getcwd())
     ensure_path_exists(conf.data_h5_dir, 'data_h5_dir', expect_dir=True)
