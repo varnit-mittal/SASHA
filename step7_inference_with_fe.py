@@ -17,6 +17,26 @@ Make sure to configure the required paths to checkpoints and datasets before exe
 Command
 python step7_inference_with_fe.py --config config/camelyon_sasha_inference_with_fe.yml --seed 4 --save_dir SAVE_DIR
 
+Outputs written under SAVE_DIR:
+- STEP1/, STEP2/                       : intermediate patches and low-res features
+- visualizations/<slide>_patches.png   : per-slide PNG showing every low-res patch
+                                          (gray boxes) and the patches the RL agent
+                                          actually visited (blue gradient by step)
+- metrics_sasha_<frac>.json            : aggregate AND per-class precision / recall /
+                                          f1 / accuracy / support
+- visit_log_sasha_<frac>.pt            : per-slide dict with all_lr_coords,
+                                          visited_coords, visited_ids, true_label,
+                                          pred_label
+- time_dict_sasha_<frac>.pt            : per-slide wall-clock timings
+
+Extra CLI flags:
+- --save_visualizations / --no_save_visualizations  : toggle the per-slide PNGs (on by default)
+- --vis_level <int>                                 : OpenSlide pyramid level for the WSI
+                                                       thumbnail used as the visualization
+                                                       backdrop. Defaults to
+                                                       patch_level_low_res + 3 (clamped).
+Optional config field:
+- class_names: ["normal", "tumor"]   # used in the per-class table; defaults to class_0 / class_1 / ...
 """
 
 import argparse
@@ -26,8 +46,12 @@ import time
 from collections import defaultdict
 from types import SimpleNamespace
 
+import cv2
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
 import yaml
+from PIL import Image, ImageDraw, ImageFont
 
 from architecture.transformer import HAFED
 from envs.WSI_cosine_env_inference import WSICosineObservationEnv_inference
@@ -43,8 +67,10 @@ from utils.metrics import (
     compute_auroc,
     compute_balanced_accuracy,
     compute_f1,
+    compute_per_class_classification_metrics,
     compute_precision,
     compute_recall,
+    format_per_class_metrics_table,
 )
 from utils.path_utils import ensure_path_exists, resolve_conf_paths
 from utils.utils import Struct
@@ -74,6 +100,14 @@ def get_arguments():
     parser.add_argument('--seed', type=int, default=4, help='set the random seed')
     parser.add_argument('--save_dir', default=None, help= 'folder path to save intermediate steps')
 
+    # Visualization arguments
+    parser.add_argument('--save_visualizations', action='store_true', default=True,
+                        help='If set, saves a PNG per slide showing all low-res patches and RL-visited patches.')
+    parser.add_argument('--no_save_visualizations', dest='save_visualizations', action='store_false',
+                        help='Disable per-slide visualization PNGs.')
+    parser.add_argument('--vis_level', type=int, default=None,
+                        help='OpenSlide pyramid level used to render the WSI thumbnail for visualization. '
+                             'If None, defaults to patch_level_low_res + 3 (clamped to the deepest level).')
 
     args = parser.parse_args()
 
@@ -118,6 +152,108 @@ def get_tsu(conf):
     fglobal.eval()
     return fglobal
 
+def _resolve_vis_level(wsi, requested_level, patch_level_low_res):
+    """Pick a safe pyramid level for the visualization thumbnail. Falls back
+    to the deepest level openslide exposes if the requested one is too high."""
+    n_levels = wsi.level_count
+    if requested_level is None:
+        candidate = int(patch_level_low_res) + 3
+    else:
+        candidate = int(requested_level)
+    return max(0, min(candidate, n_levels - 1))
+
+
+def visualize_slide_patches(
+    wsi,
+    slide_name,
+    all_lr_coords,
+    visited_patch_coords,
+    patch_size_low_res,
+    patch_level_low_res,
+    save_path,
+    requested_vis_level=None,
+    title_suffix=None,
+):
+    """Render a single PNG per slide showing:
+        * a thumbnail of the WSI at a low-magnification pyramid level,
+        * every low-resolution patch (gray boxes) computed during step1,
+        * the patches the RL agent actually visited (blue gradient by visit order).
+
+    Coords passed in are level-0 coordinates, matching what
+    Whole_Slide_Bag_FP / step2 produce. They get scaled by the thumbnail
+    downsample factor so the boxes line up with the rendered image.
+    """
+    vis_level = _resolve_vis_level(wsi, requested_vis_level, patch_level_low_res)
+    downscale_factor = wsi.level_downsamples[vis_level]
+    wsi_size = wsi.level_dimensions[vis_level]
+    wsi_img = wsi.read_region((0, 0), vis_level, wsi_size).convert("RGB")
+    wsi_np = np.array(wsi_img)
+
+    patch_size_level0 = int(patch_size_low_res) * int(2 ** int(patch_level_low_res))
+    box_w = max(1, int(patch_size_level0 / downscale_factor))
+
+    # Layer 1: every low-res patch the agent could have chosen (light gray).
+    if all_lr_coords is not None and len(all_lr_coords) > 0:
+        lr_layer = wsi_np.copy()
+        for (x_lvl0, y_lvl0) in np.asarray(all_lr_coords).reshape(-1, 2):
+            x_scaled = int(int(x_lvl0) / downscale_factor)
+            y_scaled = int(int(y_lvl0) / downscale_factor)
+            cv2.rectangle(
+                lr_layer,
+                (x_scaled, y_scaled),
+                (x_scaled + box_w, y_scaled + box_w),
+                color=(180, 180, 180),
+                thickness=2,
+            )
+        wsi_np = cv2.addWeighted(wsi_np, 0.55, lr_layer, 0.45, 0)
+
+    # Layer 2: patches the RL agent actually visited (Blues_r gradient by step).
+    if visited_patch_coords is not None and len(visited_patch_coords) > 0:
+        norm = plt.Normalize(0.0, 1.0)
+        colormap = plt.get_cmap("Blues_r")
+        n_visits = len(visited_patch_coords)
+        for i, (x_lvl0, y_lvl0) in enumerate(visited_patch_coords):
+            x_scaled = int(int(x_lvl0) / downscale_factor)
+            y_scaled = int(int(y_lvl0) / downscale_factor)
+            frac = i / max(1, n_visits - 1)
+            color = tuple(int(255 * c) for c in colormap(norm(0.15 + 0.7 * frac))[:3])
+            cv2.rectangle(
+                wsi_np,
+                (x_scaled, y_scaled),
+                (x_scaled + box_w, y_scaled + box_w),
+                color=color,
+                thickness=3,
+            )
+
+    pil_img = Image.fromarray(wsi_np)
+    draw = ImageDraw.Draw(pil_img)
+    try:
+        font = ImageFont.truetype("arial.ttf", 28)
+    except Exception:
+        font = ImageFont.load_default()
+
+    title = f"{slide_name} | LR patches={len(all_lr_coords) if all_lr_coords is not None else 0}, RL-visited={len(visited_patch_coords) if visited_patch_coords is not None else 0}"
+    if title_suffix:
+        title = f"{title} | {title_suffix}"
+
+    legend_lines = [
+        title,
+        "Gray boxes : all low-resolution patches",
+        "Blue boxes : patches visited by RL agent (light -> dark = early -> late)",
+    ]
+    pad = 8
+    line_h = 32
+    for i, line in enumerate(legend_lines):
+        y = pad + i * line_h
+        draw.rectangle([(pad - 2, y - 2), (pad + 1100, y + line_h - 4)], fill=(255, 255, 255))
+        draw.text((pad, y), line, fill=(0, 0, 0), font=font)
+
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    pil_img.save(save_path)
+    print(f"Saved patch visualization at: {save_path}")
+    return save_path
+
+
 @torch.no_grad()
 def evaluate(conf):
 
@@ -159,6 +295,15 @@ def evaluate(conf):
     y_pred = []
     y_true = []
     y_prob = []
+
+    save_visualizations = bool(getattr(conf, 'save_visualizations', True))
+    vis_dir = os.path.join(conf.save_dir, 'visualizations')
+    if save_visualizations:
+        os.makedirs(vis_dir, exist_ok=True)
+    requested_vis_level = getattr(conf, 'vis_level', None)
+
+    # Per-slide trajectory info (slide -> {all_coords, visited_coords, visited_ids, label, pred}).
+    visit_log = {}
 
     for slide in test_names:
 
@@ -214,7 +359,33 @@ def evaluate(conf):
         # Just to verify the values
         # print(y_pred)
         # print([y.item() for y in y_true])
-        
+
+        # STEP4 (optional) - per-slide visualization of all LR patches and the RL-visited patches.
+        visit_log[slide] = {
+            'all_lr_coords': np.asarray(coords),
+            'visited_coords': np.asarray(visited_patch_coords),
+            'visited_ids': list(visited_patch_id),
+            'true_label': int(true_label.item()) if torch.is_tensor(true_label) else int(true_label),
+            'pred_label': int(y_hat.item()),
+        }
+        if save_visualizations:
+            try:
+                vis_path = os.path.join(vis_dir, f"{slide}_patches.png")
+                title_suffix = f"label={visit_log[slide]['true_label']}, pred={visit_log[slide]['pred_label']}"
+                visualize_slide_patches(
+                    wsi=wsi,
+                    slide_name=slide,
+                    all_lr_coords=coords,
+                    visited_patch_coords=visited_patch_coords,
+                    patch_size_low_res=conf.patch_size,
+                    patch_level_low_res=conf.patch_level_low_res,
+                    save_path=vis_path,
+                    requested_vis_level=requested_vis_level,
+                    title_suffix=title_suffix,
+                )
+            except Exception as e:
+                print(f"[WARN] Could not save visualization for {slide}: {e}")
+
         end_time = time.time()
 
         time_dict[f'{slide}'].append(end_time - start_time)
@@ -236,12 +407,45 @@ def evaluate(conf):
     print("-" * 110)
     print(f"{'Test':<6}  | {accuracy:.4f}  | {auroc:.4f}  | {f1_score:.4f}  | {precision:.4f}  | {recall:.4f}  | {balanced_acc:.4f}")
 
+    # STEP5 - per-class breakdown (precision / recall / f1 / accuracy / support).
+    class_names = getattr(conf, 'class_names', None)
+    per_class_metrics = compute_per_class_classification_metrics(
+        y_pred=y_pred,
+        y_true=y_true,
+        num_classes=n_class,
+        class_names=class_names,
+    )
+    print()
+    print(format_per_class_metrics_table(per_class_metrics, title="Per-class metrics (Test)"))
+
+    metrics_dump = {
+        'aggregate': {
+            'accuracy': accuracy,
+            'auroc': auroc,
+            'f1': f1_score,
+            'precision': precision,
+            'recall': recall,
+            'balanced_accuracy': balanced_acc,
+        },
+        'per_class': per_class_metrics,
+        'n_class': n_class,
+    }
+    metrics_path = os.path.join(conf.save_dir, f"metrics_sasha_{conf.frac_visit}.json")
+    with open(metrics_path, 'w') as f:
+        json.dump(metrics_dump, f, indent=2)
+    print(f"Saved metrics summary at: {metrics_path}")
+
     total_time = []
     for key in time_dict.keys():
         total_time.append(sum(time_dict[key]))
     print(f"Average : {sum(total_time) / len(total_time)}")
 
     torch.save(time_dict, os.path.join(conf.save_dir, f"time_dict_sasha_{conf.frac_visit}.pt"))
+
+    # STEP6 - dump the per-slide RL trajectory log (all LR coords + visited coords) for downstream analysis.
+    visit_log_path = os.path.join(conf.save_dir, f"visit_log_sasha_{conf.frac_visit}.pt")
+    torch.save(visit_log, visit_log_path)
+    print(f"Saved per-slide RL visit log at: {visit_log_path}")
 
 
 if __name__ == '__main__':
