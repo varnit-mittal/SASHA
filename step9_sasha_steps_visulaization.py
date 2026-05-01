@@ -305,6 +305,17 @@ def draw_annotation_contours(
     # Load WSI
     slide = openslide.OpenSlide(wsi_path)
 
+    level_count = slide.level_count
+    if level < 0:
+        level = level_count + level
+    if level < 0 or level >= level_count:
+        safe_level = max(0, level_count - 1)
+        print(
+            f"[WARN] Requested level {level} is out of range for this slide (levels: 0-{level_count - 1}). "
+            f"Using level {safe_level} instead."
+        )
+        level = safe_level
+
     # Level info
     downscale_factor = slide.level_downsamples[level]
     wsi_size = slide.level_dimensions[level]
