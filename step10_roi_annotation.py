@@ -23,6 +23,7 @@ python step10_roi_annotation.py \
 import argparse
 import json
 import os
+from collections import deque
 from types import SimpleNamespace
 
 import cv2
@@ -60,7 +61,11 @@ def get_arguments():
     parser.add_argument('--level', type=int, default=6, help='OpenSlide level for ROI overlay image')
     parser.add_argument('--patch_size_level0', type=int, default=2048, help='low-resolution patch size expressed in level-0 pixels')
     parser.add_argument('--roi_percentile', type=float, default=85.0, help='percentile cutoff on suspicion score for ROI candidates')
+    parser.add_argument('--roi_candidate_top_k', type=int, default=0, help='if >0, use top-K scored patches as ROI candidates (overrides percentile cutoff)')
     parser.add_argument('--min_roi_patches', type=int, default=8, help='minimum connected candidate patches to keep an ROI')
+    parser.add_argument('--max_roi_patches', type=int, default=0, help='if >0, split large ROIs to at most this many patches')
+    parser.add_argument('--max_rois', type=int, default=0, help='if >0, keep only the top-K ROIs by score_mean')
+    parser.add_argument('--allow_single_patch_fallback', action='store_true', help='allow a single-patch ROI when no ROI meets min_roi_patches')
 
     parser.add_argument('--selected_weight', type=float, default=1.0, help='weight for RL-selected patches')
     parser.add_argument('--similar_weight', type=float, default=0.35, help='weight for similarity-updated patches')
@@ -535,17 +540,75 @@ def build_suspicion_scores(n_patches, selected_indices, similar_groups, attentio
     return scores
 
 
-def generate_connected_rois(coords, scores, patch_size_level0, roi_percentile, min_roi_patches):
-    positive = scores[scores > 0]
-    if positive.size == 0:
+def split_component_indices(comp_indices, gx, gy, scores, max_roi_patches):
+    if max_roi_patches <= 0 or comp_indices.size <= max_roi_patches:
+        return [comp_indices]
+
+    cell_to_indices = {}
+    for idx in comp_indices.tolist():
+        key = (int(gx[idx]), int(gy[idx]))
+        cell_to_indices.setdefault(key, []).append(int(idx))
+
+    unassigned = set(comp_indices.tolist())
+    sorted_indices = sorted(comp_indices.tolist(), key=lambda i: scores[i], reverse=True)
+
+    groups = []
+    for seed in sorted_indices:
+        if seed not in unassigned:
+            continue
+        group = []
+        queue = deque([seed])
+        while queue and len(group) < max_roi_patches:
+            idx = queue.popleft()
+            if idx not in unassigned:
+                continue
+            unassigned.remove(idx)
+            group.append(idx)
+            x = int(gx[idx])
+            y = int(gy[idx])
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    if dx == 0 and dy == 0:
+                        continue
+                    neighbor = (x + dx, y + dy)
+                    for n_idx in cell_to_indices.get(neighbor, []):
+                        if n_idx in unassigned:
+                            queue.append(n_idx)
+        groups.append(np.array(group, dtype=np.int64))
+
+    return groups
+
+
+def generate_connected_rois(
+    coords,
+    scores,
+    patch_size_level0,
+    roi_percentile,
+    min_roi_patches,
+    roi_candidate_top_k=0,
+    max_roi_patches=0,
+    max_rois=0,
+    allow_single_patch_fallback=False,
+):
+    positive_indices = np.where(scores > 0)[0]
+    if positive_indices.size == 0:
         return []
 
-    threshold = float(np.percentile(positive, roi_percentile))
-    candidate_indices = np.where(scores >= threshold)[0]
+    if roi_candidate_top_k and roi_candidate_top_k > 0:
+        top_k = min(int(roi_candidate_top_k), int(positive_indices.size))
+        ranked = positive_indices[np.argsort(scores[positive_indices])][-top_k:]
+        candidate_indices = ranked
+    else:
+        threshold = float(np.percentile(scores[positive_indices], roi_percentile))
+        candidate_indices = positive_indices[scores[positive_indices] >= threshold]
 
     if candidate_indices.size == 0:
-        top_idx = int(np.argmax(scores))
-        candidate_indices = np.array([top_idx], dtype=np.int64)
+        if allow_single_patch_fallback:
+            top_idx = int(np.argmax(scores))
+            candidate_indices = np.array([top_idx], dtype=np.int64)
+        else:
+            print(f"[WARN] No candidate patches found at percentile {roi_percentile}. Returning empty ROI list.")
+            return []
 
     gx = np.round(coords[:, 0] / patch_size_level0).astype(np.int32)
     gy = np.round(coords[:, 1] / patch_size_level0).astype(np.int32)
@@ -581,47 +644,56 @@ def generate_connected_rois(coords, scores, patch_size_level0, roi_percentile, m
             continue
 
         comp_indices = np.array(comp_indices, dtype=np.int64)
-        x_vals = coords[comp_indices, 0]
-        y_vals = coords[comp_indices, 1]
+        for group_indices in split_component_indices(comp_indices, gx, gy, scores, max_roi_patches):
+            if len(group_indices) < min_roi_patches:
+                continue
 
-        x_min = int(x_vals.min())
-        y_min = int(y_vals.min())
-        x_max = int(x_vals.max() + patch_size_level0)
-        y_max = int(y_vals.max() + patch_size_level0)
+            x_vals = coords[group_indices, 0]
+            y_vals = coords[group_indices, 1]
 
-        roi = {
-            'roi_id': len(rois) + 1,
-            'x_min': x_min,
-            'y_min': y_min,
-            'x_max': x_max,
-            'y_max': y_max,
-            'n_patches': int(len(comp_indices)),
-            'score_mean': float(scores[comp_indices].mean()),
-            'score_max': float(scores[comp_indices].max()),
-            'patch_indices': comp_indices.tolist(),
-        }
-        rois.append(roi)
+            x_min = int(x_vals.min())
+            y_min = int(y_vals.min())
+            x_max = int(x_vals.max() + patch_size_level0)
+            y_max = int(y_vals.max() + patch_size_level0)
+
+            roi = {
+                'roi_id': len(rois) + 1,
+                'x_min': x_min,
+                'y_min': y_min,
+                'x_max': x_max,
+                'y_max': y_max,
+                'n_patches': int(len(group_indices)),
+                'score_mean': float(scores[group_indices].mean()),
+                'score_max': float(scores[group_indices].max()),
+                'patch_indices': group_indices.tolist(),
+            }
+            rois.append(roi)
 
     if len(rois) == 0:
-        # Fallback: provide at least one ROI around top scoring patch.
-        top_idx = int(np.argmax(scores))
-        x = int(coords[top_idx, 0])
-        y = int(coords[top_idx, 1])
-        rois.append(
-            {
-                'roi_id': 1,
-                'x_min': x,
-                'y_min': y,
-                'x_max': x + patch_size_level0,
-                'y_max': y + patch_size_level0,
-                'n_patches': 1,
-                'score_mean': float(scores[top_idx]),
-                'score_max': float(scores[top_idx]),
-                'patch_indices': [top_idx],
-            }
-        )
+        if allow_single_patch_fallback:
+            top_idx = int(np.argmax(scores))
+            x = int(coords[top_idx, 0])
+            y = int(coords[top_idx, 1])
+            rois.append(
+                {
+                    'roi_id': 1,
+                    'x_min': x,
+                    'y_min': y,
+                    'x_max': x + patch_size_level0,
+                    'y_max': y + patch_size_level0,
+                    'n_patches': 1,
+                    'score_mean': float(scores[top_idx]),
+                    'score_max': float(scores[top_idx]),
+                    'patch_indices': [top_idx],
+                }
+            )
+        else:
+            print(f"[WARN] No ROIs met min_roi_patches={min_roi_patches}. Returning empty ROI list.")
+            return []
 
     rois.sort(key=lambda item: item['score_mean'], reverse=True)
+    if max_rois and int(max_rois) > 0:
+        rois = rois[:int(max_rois)]
     for idx, roi in enumerate(rois, start=1):
         roi['roi_id'] = idx
 
@@ -751,6 +823,10 @@ def main():
         patch_size_level0=args.patch_size_level0,
         roi_percentile=args.roi_percentile,
         min_roi_patches=args.min_roi_patches,
+        roi_candidate_top_k=args.roi_candidate_top_k,
+        max_roi_patches=args.max_roi_patches,
+        max_rois=args.max_rois,
+        allow_single_patch_fallback=args.allow_single_patch_fallback,
     )
 
     wsi_path = resolve_wsi_file_path(
