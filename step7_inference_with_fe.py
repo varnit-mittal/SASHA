@@ -264,7 +264,18 @@ def evaluate(conf):
 
     #df to get the true label
     bags_dataset = Dataset_All_Bags(conf.csv_path)
-    df = bags_dataset.df.set_index('slide_id')
+    df = bags_dataset.df.copy()
+    # `glioma3.csv` (and tcga.csv) store slide_id WITH the file extension
+    # (e.g. `...svs`), but the split JSONs and the rest of this script use the
+    # bare slide_id (no extension). Strip a leading dot variant of `slide_ext`
+    # off the index so `df.loc[slide]` works for both styles.
+    slide_ext = str(getattr(conf, 'slide_ext', '') or '').lstrip('.').lower()
+    if slide_ext:
+        suffix = '.' + slide_ext
+        df['slide_id'] = df['slide_id'].astype(str).apply(
+            lambda s: s[:-len(suffix)] if s.lower().endswith(suffix) else s
+        )
+    df = df.set_index('slide_id')
     
     # Loading RL agent
     agent_dict, config = load_agent(conf)
