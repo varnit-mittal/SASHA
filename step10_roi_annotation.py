@@ -648,9 +648,13 @@ def draw_rois_on_wsi(wsi_path, rois, coords, patch_size_level0, level, output_pa
         (0, 128, 255),
     ]
 
+    roi_labels = []
     for roi in rois:
-        roi_mask = np.zeros((h, w), dtype=np.uint8)
+        color = palette[(int(roi['roi_id']) - 1) % len(palette)]
         patch_indices = roi.get('patch_indices', [])
+        x_min, y_min, x_max, y_max = w, h, 0, 0
+        has_patch = False
+
         for idx in patch_indices:
             if idx < 0 or idx >= coords.shape[0]:
                 continue
@@ -662,55 +666,22 @@ def draw_rois_on_wsi(wsi_path, rois, coords, patch_size_level0, level, output_pa
                 continue
             x0 = max(0, x0)
             y0 = max(0, y0)
-            roi_mask[y0:y1, x0:x1] = 255
+            fill_layer[y0:y1, x0:x1] = color
+            has_patch = True
+            x_min = min(x_min, x0)
+            y_min = min(y_min, y0)
+            x_max = max(x_max, x1)
+            y_max = max(y_max, y1)
 
-        if roi_mask.sum() == 0:
-            continue
-
-        kernel = np.ones((3, 3), dtype=np.uint8)
-        roi_mask = cv2.morphologyEx(roi_mask, cv2.MORPH_CLOSE, kernel)
-        contours, _ = cv2.findContours(roi_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if len(contours) == 0:
-            continue
-
-        color = palette[(int(roi['roi_id']) - 1) % len(palette)]
-        cv2.drawContours(fill_layer, contours, -1, color, thickness=cv2.FILLED)
+        if has_patch:
+            roi_labels.append((roi['roi_id'], color, x_min, y_min, x_max, y_max))
 
     contour_alpha = float(np.clip(contour_alpha, 0.0, 1.0))
     out_img = cv2.addWeighted(base_img, 1.0, fill_layer, contour_alpha, 0.0)
 
-    for roi in rois:
-        roi_mask = np.zeros((h, w), dtype=np.uint8)
-        patch_indices = roi.get('patch_indices', [])
-        for idx in patch_indices:
-            if idx < 0 or idx >= coords.shape[0]:
-                continue
-            x0 = int(round(float(coords[idx, 0]) / downscale_factor))
-            y0 = int(round(float(coords[idx, 1]) / downscale_factor))
-            x1 = min(w, x0 + patch_size_level)
-            y1 = min(h, y0 + patch_size_level)
-            if x0 >= w or y0 >= h or x1 <= 0 or y1 <= 0:
-                continue
-            x0 = max(0, x0)
-            y0 = max(0, y0)
-            roi_mask[y0:y1, x0:x1] = 255
-
-        if roi_mask.sum() == 0:
-            continue
-
-        kernel = np.ones((3, 3), dtype=np.uint8)
-        roi_mask = cv2.morphologyEx(roi_mask, cv2.MORPH_CLOSE, kernel)
-        contours, _ = cv2.findContours(roi_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if len(contours) == 0:
-            continue
-
-        color = palette[(int(roi['roi_id']) - 1) % len(palette)]
-        cv2.drawContours(out_img, contours, -1, color, thickness=max(1, int(contour_thickness)))
-
-        largest = max(contours, key=cv2.contourArea)
-        x_lbl, y_lbl, _, _ = cv2.boundingRect(largest)
-        label = f"ROI-{roi['roi_id']}"
-        cv2.putText(out_img, label, (x_lbl, max(20, y_lbl - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2, cv2.LINE_AA)
+    for roi_id, color, x_min, y_min, _, _ in roi_labels:
+        label = f"ROI-{roi_id}"
+        cv2.putText(out_img, label, (int(x_min), max(20, int(y_min) - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2, cv2.LINE_AA)
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     cv2.imwrite(output_path, cv2.cvtColor(out_img, cv2.COLOR_RGB2BGR))
