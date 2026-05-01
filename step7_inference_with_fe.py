@@ -259,6 +259,76 @@ def visualize_slide_patches(
     return save_path
 
 
+def visualize_lr_patches(
+    wsi,
+    slide_name,
+    all_lr_coords,
+    patch_size_low_res,
+    patch_level_low_res,
+    save_path,
+    requested_vis_level=None,
+    title_suffix=None,
+    box_color=(220, 30, 30),     # BGR-agnostic; PIL/numpy treats as RGB at save time
+    box_thickness=2,
+):
+    """Render a per-slide PNG annotated with a red box around every
+    low-resolution patch that step1 produced for the slide.
+
+    Same coordinate handling as `visualize_slide_patches`: the H5 stores
+    level-0 (x, y) pairs, so we rescale by the downsample factor of the
+    pyramid level we render the WSI thumbnail at.
+    """
+    vis_level = _resolve_vis_level(wsi, requested_vis_level, patch_level_low_res)
+    downscale_factor = wsi.level_downsamples[vis_level]
+    wsi_size = wsi.level_dimensions[vis_level]
+    wsi_img = wsi.read_region((0, 0), vis_level, wsi_size).convert("RGB")
+    wsi_np = np.array(wsi_img)
+
+    patch_size_level0 = int(patch_size_low_res) * int(2 ** int(patch_level_low_res))
+    box_w = max(1, int(patch_size_level0 / downscale_factor))
+
+    n_patches = 0
+    if all_lr_coords is not None and len(all_lr_coords) > 0:
+        for (x_lvl0, y_lvl0) in np.asarray(all_lr_coords).reshape(-1, 2):
+            x_scaled = int(int(x_lvl0) / downscale_factor)
+            y_scaled = int(int(y_lvl0) / downscale_factor)
+            cv2.rectangle(
+                wsi_np,
+                (x_scaled, y_scaled),
+                (x_scaled + box_w, y_scaled + box_w),
+                color=box_color,
+                thickness=box_thickness,
+            )
+            n_patches += 1
+
+    pil_img = Image.fromarray(wsi_np)
+    draw = ImageDraw.Draw(pil_img)
+    try:
+        font = ImageFont.truetype("arial.ttf", 28)
+    except Exception:
+        font = ImageFont.load_default()
+
+    title = f"{slide_name} | LR patches={n_patches}"
+    if title_suffix:
+        title = f"{title} | {title_suffix}"
+
+    legend_lines = [
+        title,
+        "Red boxes : every low-resolution patch produced by step1",
+    ]
+    pad = 8
+    line_h = 32
+    for i, line in enumerate(legend_lines):
+        y = pad + i * line_h
+        draw.rectangle([(pad - 2, y - 2), (pad + 1100, y + line_h - 4)], fill=(255, 255, 255))
+        draw.text((pad, y), line, fill=(0, 0, 0), font=font)
+
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    pil_img.save(save_path)
+    print(f"Saved patch visualization at: {save_path}")
+    return save_path
+
+
 @torch.no_grad()
 def evaluate(conf):
 
@@ -385,9 +455,9 @@ def evaluate(conf):
             'pred_label': int(y_hat.item()),
         }
         if save_visualizations:
+            title_suffix = f"label={visit_log[slide]['true_label']}, pred={visit_log[slide]['pred_label']}"
             try:
                 vis_path = os.path.join(vis_dir, f"{slide}_patches.png")
-                title_suffix = f"label={visit_log[slide]['true_label']}, pred={visit_log[slide]['pred_label']}"
                 visualize_slide_patches(
                     wsi=wsi,
                     slide_name=slide,
@@ -400,7 +470,23 @@ def evaluate(conf):
                     title_suffix=title_suffix,
                 )
             except Exception as e:
-                print(f"[WARN] Could not save visualization for {slide}: {e}")
+                print(f"[WARN] Could not save combined visualization for {slide}: {e}")
+
+            # Companion render: every LR patch outlined in red (no agent overlay).
+            try:
+                lr_vis_path = os.path.join(vis_dir, f"{slide}_lr_patches.png")
+                visualize_lr_patches(
+                    wsi=wsi,
+                    slide_name=slide,
+                    all_lr_coords=coords,
+                    patch_size_low_res=conf.patch_size,
+                    patch_level_low_res=conf.patch_level_low_res,
+                    save_path=lr_vis_path,
+                    requested_vis_level=requested_vis_level,
+                    title_suffix=title_suffix,
+                )
+            except Exception as e:
+                print(f"[WARN] Could not save LR-only visualization for {slide}: {e}")
 
         end_time = time.time()
 
