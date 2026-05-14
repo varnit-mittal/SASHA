@@ -181,6 +181,39 @@ FOR custom 3-class glioma subtype dataset (`glioma3`)
 python step1_create_patches.py --source SOURCE_DIR --save_dir SAVE_DIR --extension svs --patch_level 2
 ```
 
+### Dropping white-background patches
+
+By default step1 now keeps only patches whose tissue-pixel coverage (computed
+from the binary segmentation mask produced by `segmentTissue`) is at least
+`tissue_thresh = 0.25`. This prevents red boxes in the `_lr_patches.png`
+visualization from landing in pure white space (slide margins, gaps between
+tissue fragments, internal cracks).
+
+Tuning knobs added to `step1_create_patches.py`:
+
+- `--tissue_thresh 0.25` (default) – minimum fraction of tissue pixels per
+  patch. Raise it (e.g. `0.4` or `0.5`) for stricter filtering; set `0` to
+  restore the previous "keep every coord inside the contour" behaviour.
+- `--contour_fn four_pt` (default) – the 4-point inclusion test. Switch to
+  `four_pt_hard` to additionally require *all four* inner points to lie inside
+  the tissue contour (helpful for slides with very lacy tissue boundaries).
+
+Example: stricter patching for a TCGA glioma slide
+
+```train
+python step1_create_patches.py --source SOURCE_DIR --save_dir SAVE_DIR \
+    --extension svs --patch_level 2 \
+    --tissue_thresh 0.4 --contour_fn four_pt_hard
+```
+
+Note: step1 auto-skips slides that already have an `<slide_id>.h5` in
+`SAVE_DIR/patches/`. To re-run with a new `--tissue_thresh`, pass
+`--no_auto_skip` (or delete the existing `.h5` files first).
+
+The same knobs can be set from inference YAMLs used by
+`step7_inference_with_fe.py` – add `tissue_thresh: 0.4` and / or
+`contour_fn: four_pt_hard` to the config and re-run inference.
+
 STEP 2
 This step handles feature extraction.
 There are two modes of operation:

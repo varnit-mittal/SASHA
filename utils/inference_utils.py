@@ -35,7 +35,16 @@ class Helper():
                     'keep_ids': 'none', 'exclude_ids': 'none'}
         filter_params = {'a_t': 100, 'a_h': 16, 'max_n_holes': 8}
         vis_params = {'vis_level': -1, 'line_thickness': 250}
-        patch_params = {'use_padding': True, 'contour_fn': 'four_pt'}
+        # `tissue_thresh` is the minimum fraction of tissue pixels (in the
+        # segmentation mask) required to keep a candidate patch. Reading
+        # `conf.tissue_thresh` lets the inference YAML override the default
+        # without touching code; `conf.contour_fn` lets the user switch to
+        # the stricter "four_pt_hard" check for boundary patches.
+        patch_params = {
+            'use_padding': True,
+            'contour_fn': getattr(conf, 'contour_fn', 'four_pt'),
+            'tissue_thresh': float(getattr(conf, 'tissue_thresh', 0.25)),
+        }
         self.parameters = {'seg_params': seg_params,
                   'filter_params': filter_params,
                   'patch_params': patch_params,

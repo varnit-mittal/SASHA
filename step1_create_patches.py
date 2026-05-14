@@ -42,6 +42,15 @@ def get_arguments() :
     parser.add_argument('--time_csv_col_name', type=str, default=None, help='column name for time_csv_col_name')
     parser.add_argument('--preset', default=None, type=str, help='predefined profile of default segmentation and filter parameters (.csv)')
     parser.add_argument('--process_list', type=str, default=None, help='name of list of images to process with parameters (.csv)')
+    parser.add_argument('--tissue_thresh', type=float, default=0.25,
+                        help='Minimum fraction of tissue pixels (0..1) inside the binary segmentation mask required '
+                             'for a candidate patch to be kept. 0 disables the filter (legacy behaviour). '
+                             'Increase (e.g. 0.4 - 0.6) to discard patches that lie on white background.')
+    parser.add_argument('--contour_fn', type=str, default='four_pt',
+                        choices=['four_pt', 'four_pt_hard', 'center', 'basic'],
+                        help='Contour inclusion test. "four_pt" (default) keeps a patch when any of 4 inner '
+                             'points lies inside the tissue contour. "four_pt_hard" requires all 4, which '
+                             'further trims patches that straddle tissue boundaries.')
 
     return parser
 
@@ -146,7 +155,7 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
                               'keep_ids': 'none', 'exclude_ids': 'none'},
                   filter_params={'a_t': 100, 'a_h': 16, 'max_n_holes': 8},
                   vis_params={'vis_level': -1, 'line_thickness': 500},
-                  patch_params={'use_padding': True, 'contour_fn': 'four_pt'},
+                  patch_params={'use_padding': True, 'contour_fn': 'four_pt', 'tissue_thresh': 0.25},
                   patch_level=1,
                   use_default_params=False,
                   seg=False, save_mask=True,
@@ -424,7 +433,8 @@ if __name__ == '__main__':
                   'keep_ids': 'none', 'exclude_ids': 'none'}
     filter_params = {'a_t': 100, 'a_h': 16, 'max_n_holes': 8}
     vis_params = {'vis_level': -1, 'line_thickness': 250}
-    patch_params = {'use_padding': True, 'contour_fn': 'four_pt'}
+    patch_params = {'use_padding': True, 'contour_fn': args.contour_fn,
+                    'tissue_thresh': float(args.tissue_thresh)}
 
     if args.preset:  # For custom parameters for segmentation, filters, visualization and patching
 

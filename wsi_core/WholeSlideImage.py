@@ -44,6 +44,11 @@ class WholeSlideImage(object):
         self.contours_tissue = None
         self.contours_tumor = None
         self.hdf5_file = None
+        # Cached binary tissue mask + the pyramid level it was computed at.
+        # Set by segmentTissue() and reused in process_contour() to drop
+        # patches whose pixels are mostly background (white space).
+        self.tissue_mask_seg_level = None
+        self.seg_level_used = None
 
     def getOpenSlide(self):
         return self.wsi
@@ -190,6 +195,14 @@ class WholeSlideImage(object):
         if close > 0:
             kernel = np.ones((close, close), np.uint8)
             img_otsu = cv2.morphologyEx(img_otsu, cv2.MORPH_CLOSE, kernel)                 
+
+        # Cache the binary tissue mask at the segmentation pyramid level.
+        # `process_contour` re-uses this to drop patches that are mostly
+        # white background even when their coords pass the loose 4-pt
+        # contour test (e.g. when one contour encloses several tissue
+        # fragments and the bounding rect spans the gaps between them).
+        self.tissue_mask_seg_level = img_otsu.astype(bool)
+        self.seg_level_used = seg_level
 
         scale = self.level_downsamples[seg_level]
         scaled_ref_patch_area = int(ref_patch_size**2 / (scale[0] * scale[1]))
@@ -459,7 +472,8 @@ class WholeSlideImage(object):
 
 
     def process_contour(self, cont, contour_holes, patch_level, save_path, patch_size = 256, step_size = 256,
-        contour_fn='four_pt', use_padding=True, top_left=None, bot_right=None):
+        contour_fn='four_pt', use_padding=True, top_left=None, bot_right=None,
+        tissue_thresh=0.25):
         # pdb.set_trace()
         start_x, start_y, w, h = cv2.boundingRect(cont) if cont is not None else (0, 0, self.level_dim[patch_level][0], self.level_dim[patch_level][1])
 
@@ -530,15 +544,66 @@ class WholeSlideImage(object):
         labels = pool.starmap(WholeSlideImage.process_coord_candidate, iter_patch_label)
         pool.close()
 
+        # Secondary filter: even patches whose center passes the 4-pt
+        # contour test can still be mostly white background (loose tissue
+        # contours, internal cracks, gaps between fragments enclosed by a
+        # single contour). Drop candidates whose tissue-pixel coverage in
+        # the binary segmentation mask is below `tissue_thresh`. When the
+        # mask isn't available (e.g. segmentTissue was bypassed) or
+        # tissue_thresh <= 0, this filter is a no-op.
+        tissue_mask = getattr(self, 'tissue_mask_seg_level', None)
+        seg_level_used = getattr(self, 'seg_level_used', None)
+        use_tissue_filter = (
+            tissue_mask is not None
+            and seg_level_used is not None
+            and tissue_thresh is not None
+            and float(tissue_thresh) > 0.0
+        )
+        if use_tissue_filter:
+            seg_scale = self.level_downsamples[seg_level_used]
+            mask_h, mask_w = tissue_mask.shape[:2]
+            ref_w_lvl0, ref_h_lvl0 = ref_patch_size[0], ref_patch_size[1]
+
         final_results = []
         final_labels = []
+        n_dropped_white = 0
         for res_index in range(len(results)):
-            if results[res_index] is not None:
-                final_results.append(results[res_index])
-                if labels[res_index] is None:
-                    final_labels.append(1)
-                else:
-                    final_labels.append(0)
+            coord = results[res_index]
+            if coord is None:
+                continue
+
+            if use_tissue_filter:
+                # Map the patch's level-0 bounding box into the segmentation
+                # mask's coordinate frame and measure the tissue-pixel ratio.
+                x0 = int(int(coord[0]) / seg_scale[0])
+                y0 = int(int(coord[1]) / seg_scale[1])
+                x1 = int((int(coord[0]) + ref_w_lvl0) / seg_scale[0])
+                y1 = int((int(coord[1]) + ref_h_lvl0) / seg_scale[1])
+                x0 = max(0, min(mask_w, x0))
+                x1 = max(0, min(mask_w, x1))
+                y0 = max(0, min(mask_h, y0))
+                y1 = max(0, min(mask_h, y1))
+                if x1 <= x0 or y1 <= y0:
+                    n_dropped_white += 1
+                    continue
+                tile = tissue_mask[y0:y1, x0:x1]
+                if tile.size == 0:
+                    n_dropped_white += 1
+                    continue
+                coverage = float(tile.sum()) / float(tile.size)
+                if coverage < float(tissue_thresh):
+                    n_dropped_white += 1
+                    continue
+
+            final_results.append(coord)
+            if labels[res_index] is None:
+                final_labels.append(1)
+            else:
+                final_labels.append(0)
+
+        if use_tissue_filter:
+            print('tissue_thresh={:.2f} dropped {}/{} candidate patches as background'.format(
+                float(tissue_thresh), n_dropped_white, len(results)))
         # pdb.set_trace()
 
         # results = np.array([result for result in results if result is not None])

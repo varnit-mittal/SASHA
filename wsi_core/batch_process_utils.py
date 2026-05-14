@@ -50,7 +50,11 @@ def initialize_df(slides, seg_params, filter_params, vis_params, patch_params,
 
 		# patching params
 		'use_padding': np.full((total), bool(patch_params['use_padding']), dtype=bool),
-		'contour_fn': np.full((total), patch_params['contour_fn'])
+		'contour_fn': np.full((total), patch_params['contour_fn']),
+		# Minimum tissue-pixel fraction required for a candidate patch to be
+		# kept by WholeSlideImage.process_contour. 0.0 disables the filter
+		# (legacy behaviour); typical values: 0.10 (loose) to 0.50 (strict).
+		'tissue_thresh': np.full((total), float(patch_params.get('tissue_thresh', 0.25)), dtype=np.float32),
 		})
 
 	if save_patches:
