@@ -239,6 +239,13 @@ def evaluate_policy_per_slide(model, fglobal, classifier, data_loader, header, d
         # Final state ---->
         _, attn = classifier.classify(state)
 
+    if not patches_selected_by_agent_ls:
+        raise ValueError(
+            f"Slide '{slide_name}' was not found in the dataloader. "
+            f"Check that it exists in the test split for seed={conf.seed} "
+            f"(dataset_csv/{conf.dataset}/splits/split_{conf.seed}.json)."
+        )
+
     attention_weights = attn
 
     # Loading coordinates --->
