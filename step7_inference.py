@@ -44,8 +44,10 @@ from utils.metrics import (
     compute_auroc,
     compute_balanced_accuracy,
     compute_f1,
+    compute_per_class_classification_metrics,
     compute_precision,
     compute_recall,
+    format_per_class_metrics_table,
 )
 from utils.path_utils import ensure_path_exists, resolve_conf_paths
 from utils.utils import MetricLogger
@@ -156,37 +158,84 @@ def main():
     model, actor_optimizer, critic_optimizer, epoch, rl_config = load_policy_model(model, actor_optimizer, critic_optimizer, conf.rl_ckpt_path, conf.device)
 
 
+    # Resolve human-readable class names from config (falls back to class_0, class_1, ...).
+    class_names = getattr(conf, 'class_names', None)
+    if class_names is None:
+        class_names = [f"class_{i}" for i in range(conf.n_class)]
+
     # Now Evaluation Starts
-    # Step 1 ----> We are evaluating the HAFED model [ ALl patches in H.R.]
+    # Step 1 ----> We are evaluating the HAFED model [ All patches in H.R.]
     print("HAFED Inference")
-    train_acc, train_auroc, train_f1_score, train_precision, train_recall, train_balance_acc, train_tumor_correctly_classified, train_tumor_mis_classified = evaluate_hafed(classifier, train_loader, 'Train', conf.device, conf.n_class)
-    val_acc, val_auroc, val_f1_score, val_precision, val_recall, val_balance_acc, val_tumor_correctly_classified, val_tumor_mis_classified = evaluate_hafed(classifier, val_loader, 'Val', conf.device, conf.n_class)
-    test_acc, test_auroc, test_f1_score, test_precision, test_recall, test_balance_acc, test_tumor_correctly_classified, test_tumor_mis_classified = evaluate_hafed(classifier, test_loader,'Test', conf.device, conf.n_class)
+    train_results = evaluate_hafed(classifier, train_loader, 'Train', conf.device, conf.n_class, class_names)
+    val_results = evaluate_hafed(classifier, val_loader, 'Val', conf.device, conf.n_class, class_names)
+    test_results = evaluate_hafed(classifier, test_loader, 'Test', conf.device, conf.n_class, class_names)
 
-    print(f"{'Phase':<6} | {'Acc':<6} | {'AUROC':<6} | {'F1':<6} | {'Precision':<9} | {'Recall':<6} | {'Balanced Acc':<13} | {'Tumor Correct':<15} | {'Tumor Misclass':<15}")
-    print("-" * 110)
-    print(f"{'Train':<6} | {train_acc:.4f} | {train_auroc:.4f} | {train_f1_score:.4f} | {train_precision:.4f} | {train_recall:.4f} | {train_balance_acc:.4f} | {len(train_tumor_correctly_classified):<5} | {len(train_tumor_mis_classified):<5}")
-    print(f"{'Val':<6}   | {val_acc:.4f}   | {val_auroc:.4f}   | {val_f1_score:.4f}   | {val_precision:.4f}   | {val_recall:.4f}   | {val_balance_acc:.4f}   | {len(val_tumor_correctly_classified):<5}   | {len(val_tumor_mis_classified):<5}")
-    print(f"{'Test':<6}  | {test_acc:.4f}  | {test_auroc:.4f}  | {test_f1_score:.4f}  | {test_precision:.4f}  | {test_recall:.4f}  | {test_balance_acc:.4f}  | {len(test_tumor_correctly_classified):<5}  | {len(test_tumor_mis_classified):<5}")
-
+    _print_results_table("HAFED", [train_results, val_results, test_results], class_names)
 
     ################# Breaker
 
-    print("--- * 50")
+    print("\n" + "=" * 120)
     print("SASHA - Deterministic Policy {Pick Max}")
-    train_acc, train_auroc, train_f1_score, train_precision, train_recall, train_balance_acc, train_tumor_correctly_classified, train_tumor_mis_classified = evaluate_policy(model, fglobal, classifier, train_loader,'Train', conf.device, epoch, conf)
-    val_acc, val_auroc, val_f1_score, val_precision, val_recall, val_balance_acc, val_tumor_correctly_classified, val_tumor_mis_classified = evaluate_policy(model, fglobal, classifier, val_loader,'Val', conf.device, epoch, conf)
-    test_acc, test_auroc, test_f1_score, test_precision, test_recall, test_balance_acc, test_tumor_correctly_classified, test_tumor_mis_classified = evaluate_policy(model, fglobal, classifier, test_loader,'Test', conf.device, epoch, conf)
+    train_results = evaluate_policy(model, fglobal, classifier, train_loader, 'Train', conf.device, epoch, conf, class_names)
+    val_results = evaluate_policy(model, fglobal, classifier, val_loader, 'Val', conf.device, epoch, conf, class_names)
+    test_results = evaluate_policy(model, fglobal, classifier, test_loader, 'Test', conf.device, epoch, conf, class_names)
 
-    print(f"{'Phase':<6} | {'Acc':<6} | {'AUROC':<6} | {'F1':<6} | {'Precision':<9} | {'Recall':<6} | {'Balanced Acc':<13} | {'Tumor Correct':<15} | {'Tumor Misclass':<15}")
-    print("-" * 110)
-    print(f"{'Train':<6} | {train_acc:.4f} | {train_auroc:.4f} | {train_f1_score:.4f} | {train_precision:.4f} | {train_recall:.4f} | {train_balance_acc:.4f} | {len(train_tumor_correctly_classified):<5} | {len(train_tumor_mis_classified):<5}")
-    print(f"{'Val':<6}   | {val_acc:.4f}   | {val_auroc:.4f}   | {val_f1_score:.4f}   | {val_precision:.4f}   | {val_recall:.4f}   | {val_balance_acc:.4f}   | {len(val_tumor_correctly_classified):<5}   | {len(val_tumor_mis_classified):<5}")
-    print(f"{'Test':<6}  | {test_acc:.4f}  | {test_auroc:.4f}  | {test_f1_score:.4f}  | {test_precision:.4f}  | {test_recall:.4f}  | {test_balance_acc:.4f}  | {len(test_tumor_correctly_classified):<5}  | {len(test_tumor_mis_classified):<5}")
+    _print_results_table("SASHA", [train_results, val_results, test_results], class_names)
+
+
+def _compute_per_class_counts(y_pred_labels, y_true, slide_names, n_class, class_names):
+    """Compute correct/incorrect counts for every class."""
+    y_pred_np = y_pred_labels.cpu().numpy()
+    y_true_np = y_true.cpu().numpy()
+
+    per_class = {}
+    for cls_idx in range(n_class):
+        cls_name = class_names[cls_idx]
+        indices = [i for i, val in enumerate(y_true_np) if val == cls_idx]
+        correct = [slide_names[i] for i in indices if y_pred_np[i] == y_true_np[i]]
+        incorrect = [slide_names[i] for i in indices if y_pred_np[i] != y_true_np[i]]
+        per_class[cls_name] = {'correct': correct, 'incorrect': incorrect, 'total': len(indices)}
+    return per_class
+
+
+def _print_results_table(method_name, results_list, class_names):
+    """Print an aggregate metrics table plus a per-class correct/incorrect table."""
+    phase_labels = ['Train', 'Val', 'Test']
+
+    # Aggregate table
+    header = f"{'Phase':<6} | {'Acc':<6} | {'AUROC':<6} | {'F1':<6} | {'Precision':<9} | {'Recall':<6} | {'Balanced Acc':<12}"
+    print(f"\n{method_name} - Aggregate Metrics")
+    print(header)
+    print("-" * len(header))
+    for phase, res in zip(phase_labels, results_list):
+        print(f"{phase:<6} | {res['accuracy']:.4f} | {res['auroc']:.4f} | {res['f1']:.4f} | {res['precision']:.4f}    | {res['recall']:.4f} | {res['balanced_acc']:.4f}")
+
+    # Per-class table
+    cls_header_parts = [f"{'Phase':<6}"]
+    for cn in class_names:
+        cls_header_parts.append(f"{cn} Correct")
+        cls_header_parts.append(f"{cn} Wrong")
+    cls_header = " | ".join(cls_header_parts)
+    print(f"\n{method_name} - Per-class Correct / Incorrect")
+    print(cls_header)
+    print("-" * len(cls_header))
+    for phase, res in zip(phase_labels, results_list):
+        parts = [f"{phase:<6}"]
+        for cn in class_names:
+            c = len(res['per_class'][cn]['correct'])
+            w = len(res['per_class'][cn]['incorrect'])
+            parts.append(f"{c:<{len(cn)+8}}")
+            parts.append(f"{w:<{len(cn)+6}}")
+        print(" | ".join(parts))
+
+    # Detailed per-class precision / recall / f1 table (test set only)
+    test_res = results_list[2]
+    print()
+    print(format_per_class_metrics_table(test_res['per_class_metrics'], title=f"{method_name} - Per-class Metrics (Test)"))
 
 
 @torch.no_grad()
-def evaluate_policy(model, fglobal, classifier, data_loader, header, device, epoch, conf, is_eval = True, is_top_k = False, is_top_p = False, seed = 1):
+def evaluate_policy(model, fglobal, classifier, data_loader, header, device, epoch, conf, class_names, is_eval=True, is_top_k=False, is_top_p=False, seed=1):
 
     model.eval()
 
@@ -206,20 +255,19 @@ def evaluate_policy(model, fglobal, classifier, data_loader, header, device, epo
         if conf.fglobal == 'attn':
             env = WSIObservationEnv(lr_features=state, hr_features=hr_features, label=label, conf=conf)
         else:
-            env = WSICosineObservationEnv(lr_features=state, hr_features=hr_features, label=label, conf=conf)  # By default this is the environment creation
+            env = WSICosineObservationEnv(lr_features=state, hr_features=hr_features, label=label, conf=conf)
 
         N = state.shape[1]
         visited_patch_id = []
         done = False
 
         while not done:
-            action, _, _ = model.get_action(state, visited_patch_id, is_eval = is_eval, is_top_k= is_top_k, is_top_p = is_top_p)
+            action, _, _ = model.get_action(state, visited_patch_id, is_eval=is_eval, is_top_k=is_top_k, is_top_p=is_top_p)
             new_state, reward, done = env.step(action=action, state_update_net=fglobal, classifier_net=classifier, device=device)
             state = new_state
             visited_patch_id.append(action.item())
 
         final_reward += reward
-        loss = -1 * reward
         slide_preds, attn = classifier.classify(state)
         pred = torch.softmax(slide_preds, dim=-1)
 
@@ -239,29 +287,19 @@ def evaluate_policy(model, fglobal, classifier, data_loader, header, device, epo
     recall = compute_recall(y_pred_labels, y_true, conf.n_class)
     balanced_acc = compute_balanced_accuracy(y_pred_labels, y_true)
 
-    y_pred_np = y_pred_labels.cpu().numpy()
-    y_true_np = y_true.cpu().numpy()
+    per_class = _compute_per_class_counts(y_pred_labels, y_true, slide_names, conf.n_class, class_names)
+    per_class_metrics = compute_per_class_classification_metrics(y_pred, y_true, conf.n_class, class_names)
 
-    # Slides whose true label belongs to a positive (non-zero) class.
-    # For binary problems this matches the original "tumor" slides; for
-    # multiclass it covers every non-class-0 slide.
-    true_label_pos_indices = [i for i, val in enumerate(y_true_np) if val != 0]
+    return {
+        'accuracy': accuracy, 'auroc': auroc, 'f1': f1_score,
+        'precision': precision, 'recall': recall, 'balanced_acc': balanced_acc,
+        'per_class': per_class, 'per_class_metrics': per_class_metrics,
+    }
 
-    correctly_classified = []
-    misclassified = []
-
-    for idx in true_label_pos_indices:
-        if y_pred_np[idx] == y_true_np[idx]:
-            correctly_classified.append(slide_names[idx])
-        else:
-            misclassified.append(slide_names[idx])
-
-    return accuracy, auroc, f1_score, precision, recall, balanced_acc, correctly_classified, misclassified
 
 @torch.no_grad()
-def evaluate_hafed(model, data_loader, header, device, n_class):
+def evaluate_hafed(model, data_loader, header, device, n_class, class_names):
 
-    # Set the network to evaluation mode
     model.eval()
 
     y_pred = []
@@ -271,7 +309,7 @@ def evaluate_hafed(model, data_loader, header, device, n_class):
 
     for data in metric_logger.log_every(data_loader, 100, header):
 
-        hr_features = data['hr'].to(device, dtype=torch.float32) # Op : N x d
+        hr_features = data['hr'].to(device, dtype=torch.float32)
         slide_name = data['slide_name'][0]
         label = data['label'].to(device)
 
@@ -293,21 +331,14 @@ def evaluate_hafed(model, data_loader, header, device, n_class):
     recall = compute_recall(y_pred_labels, y_true, n_class)
     balanced_acc = compute_balanced_accuracy(y_pred_labels, y_true)
 
-    y_pred_np = y_pred_labels.cpu().numpy()
-    y_true_np = y_true.cpu().numpy()
+    per_class = _compute_per_class_counts(y_pred_labels, y_true, slide_names, n_class, class_names)
+    per_class_metrics = compute_per_class_classification_metrics(y_pred, y_true, n_class, class_names)
 
-    true_label_pos_indices = [i for i, val in enumerate(y_true_np) if val != 0]
-
-    correctly_classified = []
-    misclassified = []
-
-    for idx in true_label_pos_indices:
-        if y_pred_np[idx] == y_true_np[idx]:
-            correctly_classified.append(slide_names[idx])
-        else:
-            misclassified.append(slide_names[idx])
-
-    return accuracy, auroc, f1_score, precision, recall, balanced_acc, correctly_classified, misclassified
+    return {
+        'accuracy': accuracy, 'auroc': auroc, 'f1': f1_score,
+        'precision': precision, 'recall': recall, 'balanced_acc': balanced_acc,
+        'per_class': per_class, 'per_class_metrics': per_class_metrics,
+    }
 
 
 if __name__ == '__main__':
