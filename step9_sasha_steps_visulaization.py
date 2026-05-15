@@ -191,6 +191,12 @@ def evaluate_policy_per_slide(model, fglobal, classifier, data_loader, header, d
     if slide_name is None :
         raise Exception("Enter a valid slide_name in test loader")
 
+    # Strip file extension if the user accidentally included it (e.g. ".svs", ".tif").
+    for ext in ('.svs', '.tif', '.tiff', '.ndpi', '.mrxs'):
+        if slide_name.lower().endswith(ext):
+            slide_name = slide_name[:-len(ext)]
+            break
+
     model.eval()
 
     patches_selected_by_agent_ls = []
