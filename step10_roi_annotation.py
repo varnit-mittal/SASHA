@@ -631,6 +631,11 @@ def generate_connected_rois(coords, scores, patch_size_level0, roi_percentile, m
 def draw_rois_on_wsi(wsi_path, rois, coords, patch_size_level0, level, output_path, contour_alpha, contour_thickness):
     slide = openslide.OpenSlide(wsi_path)
 
+    if level >= slide.level_count:
+        actual_level = slide.level_count - 1
+        print(f"[WARN] Requested level={level} but slide only has {slide.level_count} levels. Using level={actual_level}.")
+        level = actual_level
+
     downscale_factor = float(slide.level_downsamples[level])
     wsi_size = slide.level_dimensions[level]
     wsi_img = slide.read_region((0, 0), level, wsi_size).convert('RGB')
