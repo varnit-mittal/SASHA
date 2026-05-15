@@ -506,13 +506,30 @@ def evaluate_policy_for_slide(model, fglobal, classifier, data_loader, device, c
 
         final_state = state
         _, final_attn = classifier.classify(final_state)
+
+        # Also compute raw attention logits (pre-softmax) for sharper signal.
+        # The softmax attention spreads mass so thinly over hundreds of patches
+        # that the normalized scores become nearly uniform.
+        feat = final_state[0]
+        y = classifier.dimreduction_2(feat) if classifier.use_dim_reduction else feat
+        raw_attn_logits = classifier.attention_2(y)  # [n_token, N] pre-softmax
         break
 
     if not found:
         raise ValueError(f"Slide '{slide_name}' not found in test split for seed={conf.seed}")
 
     coords = get_slide_coords(conf.level3_path, slide_name, pretrain=conf.pretrain)
-    attention_scores = extract_patch_attention(final_attn, coords.shape[0])
+    n_patches = coords.shape[0]
+
+    # Use raw logits instead of softmax attention for much sharper ROI signal.
+    attention_scores = extract_patch_attention(raw_attn_logits, n_patches)
+
+    print(f"[DEBUG] n_patches={n_patches}, selected={len(selected_indices)}, "
+          f"similar_groups_total={sum(len(g) for g in similar_groups)}")
+    print(f"[DEBUG] attention shape={final_attn.shape if final_attn is not None else None}, "
+          f"raw_logits shape={raw_attn_logits.shape if raw_attn_logits is not None else None}")
+    print(f"[DEBUG] attention_scores: min={attention_scores.min():.6f}, max={attention_scores.max():.6f}, "
+          f"mean={attention_scores.mean():.6f}, std={attention_scores.std():.6f}")
 
     return coords, selected_indices, similar_groups, attention_scores
 
