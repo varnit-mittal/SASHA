@@ -59,12 +59,12 @@ def get_arguments():
 
     parser.add_argument('--level', type=int, default=6, help='OpenSlide level for ROI overlay image')
     parser.add_argument('--patch_size_level0', type=int, default=2048, help='low-resolution patch size expressed in level-0 pixels')
-    parser.add_argument('--roi_percentile', type=float, default=85.0, help='percentile cutoff on suspicion score for ROI candidates')
-    parser.add_argument('--min_roi_patches', type=int, default=8, help='minimum connected candidate patches to keep an ROI')
+    parser.add_argument('--roi_percentile', type=float, default=75.0, help='percentile cutoff on suspicion score for ROI candidates (over all patches)')
+    parser.add_argument('--min_roi_patches', type=int, default=3, help='minimum connected candidate patches to keep an ROI')
 
-    parser.add_argument('--selected_weight', type=float, default=1.0, help='weight for RL-selected patches')
-    parser.add_argument('--similar_weight', type=float, default=0.35, help='weight for similarity-updated patches')
-    parser.add_argument('--attention_weight', type=float, default=0.65, help='weight for classifier attention scores')
+    parser.add_argument('--selected_weight', type=float, default=0.6, help='weight for RL-selected patches')
+    parser.add_argument('--similar_weight', type=float, default=0.3, help='weight for similarity-updated patches')
+    parser.add_argument('--attention_weight', type=float, default=1.0, help='weight for classifier attention scores (covers all patches)')
     parser.add_argument('--contour_alpha', type=float, default=0.30, help='alpha for filled contour overlay [0,1]')
     parser.add_argument('--contour_thickness', type=int, default=3, help='line thickness for ROI contour boundaries')
 
@@ -518,29 +518,49 @@ def evaluate_policy_for_slide(model, fglobal, classifier, data_loader, device, c
 
 
 def build_suspicion_scores(n_patches, selected_indices, similar_groups, attention_scores, selected_w, similar_w, attn_w):
+    """Compute per-patch suspicion scores combining RL selection, TSU similarity,
+    and classifier attention. All three signals are normalized to [0, 1] before
+    weighting so that the attention component (which covers ALL patches) doesn't
+    get swamped by the sparse RL selection signal."""
     scores = np.zeros((n_patches,), dtype=np.float32)
 
+    # RL-selected patches
+    selection_signal = np.zeros((n_patches,), dtype=np.float32)
     for idx in selected_indices:
         if 0 <= idx < n_patches:
-            scores[idx] += selected_w
+            selection_signal[idx] += 1.0
+    if selection_signal.max() > 0:
+        selection_signal /= selection_signal.max()
 
+    # Similar patches (propagated via TSU cosine threshold)
+    similarity_signal = np.zeros((n_patches,), dtype=np.float32)
     for group in similar_groups:
         for idx in group:
             if 0 <= idx < n_patches:
-                scores[idx] += similar_w
+                similarity_signal[idx] += 1.0
+    if similarity_signal.max() > 0:
+        similarity_signal /= similarity_signal.max()
 
+    # Attention from classifier (already normalized to [0,1] by extract_patch_attention)
+    attn_signal = np.zeros((n_patches,), dtype=np.float32)
     if attention_scores is not None and attention_scores.shape[0] == n_patches:
-        scores += attn_w * attention_scores
+        attn_signal = attention_scores.copy()
+
+    scores = selected_w * selection_signal + similar_w * similarity_signal + attn_w * attn_signal
 
     return scores
 
 
 def generate_connected_rois(coords, scores, patch_size_level0, roi_percentile, min_roi_patches):
-    positive = scores[scores > 0]
-    if positive.size == 0:
+    if scores.max() <= 0:
         return []
 
-    threshold = float(np.percentile(positive, roi_percentile))
+    # Use the percentile over ALL patches (not just positive). This ensures
+    # that when attention covers the full slide, the threshold is meaningful
+    # relative to the entire distribution rather than a sparse subset.
+    threshold = float(np.percentile(scores, roi_percentile))
+    # Ensure threshold is at least slightly positive to avoid trivial ROIs.
+    threshold = max(threshold, 1e-6)
     candidate_indices = np.where(scores >= threshold)[0]
 
     if candidate_indices.size == 0:
@@ -768,6 +788,9 @@ def main():
         attn_w=args.attention_weight,
     )
 
+    print(f"[INFO] Score stats: min={scores.min():.4f}, max={scores.max():.4f}, "
+          f"mean={scores.mean():.4f}, non-zero={int((scores > 0).sum())}/{len(scores)}")
+
     rois = generate_connected_rois(
         coords=coords,
         scores=scores,
@@ -775,6 +798,8 @@ def main():
         roi_percentile=args.roi_percentile,
         min_roi_patches=args.min_roi_patches,
     )
+
+    print(f"[INFO] Found {len(rois)} ROIs (roi_percentile={args.roi_percentile}, min_roi_patches={args.min_roi_patches})")
 
     wsi_path = resolve_wsi_file_path(
         slide_name=args.slide_name,
